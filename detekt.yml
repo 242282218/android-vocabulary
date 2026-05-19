@@ -1,0 +1,30 @@
+style:
+  MagicNumber:
+    active: false
+  MaxLineLength:
+    active: false
+  ReturnCount:
+    active: false
+  NewLineAtEndOfFile:
+    active: false
+
+complexity:
+  LongParameterList:
+    active: false
+  TooManyFunctions:
+    active: false
+  LongMethod:
+    active: false
+  CyclomaticComplexMethod:
+    threshold: 18
+
+naming:
+  FunctionNaming:
+    ignoreAnnotated:
+      - Composable
+  TopLevelPropertyNaming:
+    active: false
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: false

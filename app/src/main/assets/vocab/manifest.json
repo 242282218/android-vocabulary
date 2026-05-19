@@ -1,0 +1,26 @@
+{
+    "buildTarget":  "publish",
+    "generatedAt":  "2026-05-16",
+    "books":  {
+                  "CET4":  {
+                               "count":  3846,
+                               "file":  "cet4.json"
+                           },
+                  "CET6":  {
+                               "count":  5406,
+                               "file":  "cet6.json"
+                           },
+                  "KAOYAN":  {
+                                 "count":  4801,
+                                 "file":  "kaoyan.json"
+                             },
+                  "IELTS":  {
+                                "count":  5038,
+                                "file":  "ielts.json"
+                            },
+                  "TOEFL":  {
+                                "count":  6970,
+                                "file":  "toefl.json"
+                            }
+              }
+}
