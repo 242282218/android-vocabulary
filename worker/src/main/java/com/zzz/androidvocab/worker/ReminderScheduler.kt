@@ -10,9 +10,11 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
+import javax.inject.Singleton
 
 private const val DAILY_REVIEW_REMINDER_WORK = "daily-review-reminder"
 
+@Singleton
 class ReminderScheduler
     @Inject
     constructor(

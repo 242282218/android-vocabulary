@@ -1,13 +1,20 @@
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path $PSScriptRoot '..\lib\android-env.ps1')
+. (Join-Path (Join-Path $PSScriptRoot '..') (Join-Path 'lib' 'android-env.ps1'))
 $repoRoot = Get-AndroidVocabularyRepoRoot
 Use-AndroidVocabularyJavaHome
 
-& (Join-Path $repoRoot 'scripts\test\verify-vocab-assets.ps1')
-& (Join-Path $repoRoot 'gradlew.bat') --no-daemon --console=plain ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest
-if ($LASTEXITCODE -ne 0) {
-    throw "Gradle verification failed with exit code $LASTEXITCODE"
+try {
+    & (Join-AndroidVocabularyPath $repoRoot @('scripts', 'test', 'verify-release-scripts.ps1'))
+} catch {
+    throw "Release script regression verification failed before local Gradle verification. Cause: $($_.Exception.Message)"
 }
+
+try {
+    & (Join-AndroidVocabularyPath $repoRoot @('scripts', 'test', 'verify-vocab-assets.ps1'))
+} catch {
+    throw "Publish-safe vocabulary asset verification failed before local Gradle verification. Cause: $($_.Exception.Message)"
+}
+Invoke-AndroidVocabularyGradle 'Local Gradle verification' @('ktlintCheck', 'detekt', 'testDebugUnitTest', 'assembleDebug', 'assembleDebugAndroidTest')
 
 Write-Host '[ok] local verification passed'

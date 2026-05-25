@@ -8,6 +8,8 @@ import com.zzz.androidvocab.core.domain.SubmitReviewFeedbackUseCase
 import com.zzz.androidvocab.core.model.AppSettings
 import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.ReviewCard
+import com.zzz.androidvocab.core.model.ReviewDataIntegrityReport
+import com.zzz.androidvocab.core.model.ReviewDataRepairResult
 import com.zzz.androidvocab.core.model.ReviewQueueItem
 import com.zzz.androidvocab.core.model.ReviewRating
 import com.zzz.androidvocab.core.model.ReviewResult
@@ -81,6 +83,29 @@ class ReviewViewModelTest {
             assertEquals(3_500L, reviewRepository.commands.single().durationMs)
         }
 
+    @Test
+    fun backIsHiddenWhenCurrentCardChanges() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val reviewRepository = RecordingReviewRepository()
+            val viewModel = viewModel(reviewRepository = reviewRepository)
+            viewModel.uiState.first { it.item != null }
+            advanceUntilIdle()
+
+            viewModel.showBack()
+            assertEquals(true, viewModel.uiState.first { it.isBackVisible }.isBackVisible)
+
+            reviewRepository.queue.value =
+                TodayQueue(
+                    dueItems = listOf(reviewQueueItem(cardId = "card-2", wordId = "word-2")),
+                    newItems = emptyList(),
+                )
+
+            val stateAfterCardChange = viewModel.uiState.first { it.item?.card?.id == "card-2" }
+            assertEquals(false, stateAfterCardChange.isBackVisible)
+        }
+
     private fun viewModel(
         reviewRepository: RecordingReviewRepository,
         clock: MutableClock = MutableClock(Instant.parse("2026-05-16T08:00:00Z")),
@@ -107,12 +132,13 @@ class ReviewViewModelTest {
 private class RecordingReviewRepository : ReviewRepository {
     val commands = mutableListOf<SubmitFeedbackCommand>()
     private val item = reviewQueueItem()
+    val queue = MutableStateFlow(TodayQueue(dueItems = listOf(item), newItems = emptyList()))
 
     override fun observeTodayQueue(
         now: Instant,
         selectedBooks: Set<BookCode>,
         dailyNewLimit: Int,
-    ): Flow<TodayQueue> = MutableStateFlow(TodayQueue(dueItems = listOf(item), newItems = emptyList()))
+    ): Flow<TodayQueue> = queue
 
     override suspend fun submitFeedback(command: SubmitFeedbackCommand): ReviewResult {
         commands += command
@@ -122,6 +148,21 @@ private class RecordingReviewRepository : ReviewRepository {
     override suspend fun replayLogs(cardId: String): ReviewCard = item.card
 
     override suspend fun getQueueItem(cardId: String): ReviewQueueItem = item
+
+    override suspend fun inspectReviewDataIntegrity(): ReviewDataIntegrityReport =
+        ReviewDataIntegrityReport(
+            cardsWithLogs = 0,
+            missingCacheCount = 0,
+            inconsistentCacheCount = 0,
+            legacyLogCardCount = 0,
+        )
+
+    override suspend fun repairReviewDataCache(): ReviewDataRepairResult =
+        ReviewDataRepairResult(
+            before = inspectReviewDataIntegrity(),
+            after = inspectReviewDataIntegrity(),
+            repairedCount = 0,
+        )
 }
 
 private class FakeSettingsRepository : SettingsRepository {
@@ -161,12 +202,15 @@ private class MutableClock(
     override fun today(): LocalDate = LocalDate.ofInstant(instant, zoneId())
 }
 
-private fun reviewQueueItem(): ReviewQueueItem =
+private fun reviewQueueItem(
+    cardId: String = CARD_ID,
+    wordId: String = WORD_ID,
+): ReviewQueueItem =
     ReviewQueueItem(
         card =
             ReviewCard(
-                id = CARD_ID,
-                wordId = WORD_ID,
+                id = cardId,
+                wordId = wordId,
                 bookCode = BookCode.CET4,
                 state = ReviewState.Review,
                 difficulty = 5.0,
@@ -183,7 +227,7 @@ private fun reviewQueueItem(): ReviewQueueItem =
             ),
         word =
             WordEntry(
-                id = WORD_ID,
+                id = wordId,
                 word = "ability",
                 meaning = "能力",
                 phonetic = null,

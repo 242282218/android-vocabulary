@@ -7,6 +7,8 @@ import kotlinx.serialization.Serializable
 data class VocabManifest(
     val buildTarget: String,
     val generatedAt: String,
+    val sourcesHash: String = "",
+    val assetFingerprint: String = "",
     val books: Map<String, VocabManifestBook>,
 )
 
@@ -14,6 +16,7 @@ data class VocabManifest(
 data class VocabManifestBook(
     val file: String,
     val count: Int,
+    val hash: String = "",
 )
 
 @Serializable

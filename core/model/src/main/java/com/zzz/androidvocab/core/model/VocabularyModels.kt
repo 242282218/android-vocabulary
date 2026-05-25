@@ -12,6 +12,8 @@ enum class BookCode(
     TOEFL("TOEFL", "toefl.json", 6970),
 }
 
+fun String.toBookCodeOrNull(): BookCode? = BookCode.entries.firstOrNull { it.name == this }
+
 data class WordEntry(
     val id: String,
     val word: String,

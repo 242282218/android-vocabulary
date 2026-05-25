@@ -2,6 +2,11 @@ package com.zzz.androidvocab.core.model
 
 import java.time.Instant
 
+// Mastery threshold constants — keep in sync with SQL queries in WordDao.observeBookProgress
+// and StatsDao.observeBookStats (scheduledDays >= 21 AND retrievability >= 0.85)
+const val MASTERED_SCHEDULED_DAYS = 21
+const val MASTERED_RETRIEVABILITY = 0.85
+
 enum class ReviewRating(
     val wireName: String,
 ) {
@@ -35,10 +40,7 @@ data class ReviewCard(
     val firstReviewedAt: Instant?,
     val createdAt: Instant,
     val updatedAt: Instant,
-) {
-    fun isMastered(now: Instant): Boolean =
-        scheduledDays >= 21 && (retrievability ?: 0.0) >= 0.85 && (dueAt == null || dueAt > now)
-}
+)
 
 data class ReviewLog(
     val id: String,
@@ -98,8 +100,11 @@ data class ReviewDataIntegrityReport(
     val missingCacheCount: Int,
     val inconsistentCacheCount: Int,
     val legacyLogCardCount: Int,
+    val orphanLogCount: Int = 0,
+    val repairableIssueCount: Int = missingCacheCount + inconsistentCacheCount,
 ) {
-    val issueCount: Int = missingCacheCount + inconsistentCacheCount
+    val manualReviewIssueCount: Int = legacyLogCardCount + orphanLogCount
+    val issueCount: Int = missingCacheCount + inconsistentCacheCount + legacyLogCardCount + orphanLogCount
 }
 
 data class ReviewDataRepairResult(

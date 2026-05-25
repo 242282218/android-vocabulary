@@ -4,6 +4,8 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
+const val VOCAB_DATABASE_VERSION = 5
+
 @Database(
     entities = [
         WordEntryEntity::class,
@@ -16,7 +18,8 @@ import androidx.room.TypeConverters
         SourceManifestEntity::class,
         VocabularyImportRunEntity::class,
     ],
-    version = 3,
+    views = [ValidReviewLogView::class, WordCardView::class],
+    version = VOCAB_DATABASE_VERSION,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

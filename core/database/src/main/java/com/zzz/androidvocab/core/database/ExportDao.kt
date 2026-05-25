@@ -10,10 +10,23 @@ interface ExportDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSettingsSnapshot(snapshot: AppSettingsSnapshotEntity)
 
-    @Query("SELECT * FROM review_cards ORDER BY updatedAt ASC")
+    @Query(
+        """
+        SELECT c.*
+        FROM review_cards c
+        JOIN wordbook_memberships m ON m.wordId = c.wordId AND m.bookCode = c.bookCode
+        ORDER BY c.updatedAt ASC
+        """,
+    )
     suspend fun reviewCards(): List<ReviewCardEntity>
 
-    @Query("SELECT * FROM review_logs ORDER BY reviewedAt ASC")
+    @Query(
+        """
+        SELECT l.*
+        FROM valid_review_logs l
+        ORDER BY l.reviewedAt ASC
+        """,
+    )
     suspend fun reviewLogs(): List<ReviewLogEntity>
 
     @Query("SELECT * FROM daily_stats ORDER BY localDay ASC")
@@ -23,7 +36,7 @@ interface ExportDao {
         """
         WITH first_reviews AS (
           SELECT cardId, MIN(reviewedAt) AS firstReviewedAt
-          FROM review_logs
+          FROM valid_review_logs
           GROUP BY cardId
         )
         SELECT
@@ -35,7 +48,7 @@ interface ExportDao {
           SUM(CASE WHEN l.rating = 'easy' THEN 1 ELSE 0 END) AS easyCount,
           COUNT(*) AS completedCount,
           IFNULL(SUM(l.durationMs), 0) AS durationMs
-        FROM review_logs l
+        FROM valid_review_logs l
         JOIN first_reviews f ON f.cardId = l.cardId
         GROUP BY l.localDay
         ORDER BY l.localDay ASC

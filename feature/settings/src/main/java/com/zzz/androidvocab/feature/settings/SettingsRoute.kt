@@ -220,7 +220,12 @@ fun SettingsScreen(
         }
         VocabCard(elevated = false) {
             SectionTitle("数据导出")
-            PrimaryAction("导出 JSON", onExport, Modifier.fillMaxWidth())
+            PrimaryAction(
+                text = if (uiState.isExporting) "导出中" else "导出 JSON",
+                onClick = onExport,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !uiState.isExporting,
+            )
             uiState.exportResult?.let {
                 Text(
                     it.absolutePath,
@@ -248,7 +253,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !uiState.dataMaintenance.inProgress,
             )
-            if ((uiState.dataMaintenance.report?.issueCount ?: 0) > 0) {
+            if ((uiState.dataMaintenance.report?.repairableIssueCount ?: 0) > 0) {
                 OutlinedButton(
                     modifier =
                         Modifier

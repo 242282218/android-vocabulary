@@ -1,6 +1,7 @@
 package com.zzz.androidvocab.feature.stats
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -265,11 +266,13 @@ private fun RowScope.DistributionSegment(
 }
 
 @Composable
-private fun activityColor(level: Int): Color =
-    when (level) {
+private fun activityColor(level: Int): Color {
+    val isDark = isSystemInDarkTheme()
+    return when (level) {
         0 -> MaterialTheme.colorScheme.surfaceVariant
-        1 -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.62f)
-        2 -> MaterialTheme.colorScheme.secondaryContainer
-        3 -> VocabColors.Success.copy(alpha = 0.72f)
-        else -> MaterialTheme.colorScheme.primary
+        1 -> if (isDark) VocabColors.HeatmapLevel1Dark else VocabColors.HeatmapLevel1
+        2 -> if (isDark) VocabColors.HeatmapLevel2Dark else VocabColors.HeatmapLevel2
+        3 -> if (isDark) VocabColors.HeatmapLevel3Dark else VocabColors.HeatmapLevel3
+        else -> if (isDark) VocabColors.HeatmapLevel4Dark else VocabColors.HeatmapLevel4
     }
+}

@@ -4,6 +4,8 @@ import com.zzz.androidvocab.core.common.ClockProvider
 import com.zzz.androidvocab.core.model.AppSettings
 import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.ReviewCard
+import com.zzz.androidvocab.core.model.ReviewDataIntegrityReport
+import com.zzz.androidvocab.core.model.ReviewDataRepairResult
 import com.zzz.androidvocab.core.model.ReviewQueueItem
 import com.zzz.androidvocab.core.model.ReviewResult
 import com.zzz.androidvocab.core.model.SubmitFeedbackCommand
@@ -77,6 +79,21 @@ private class RecordingReviewRepository : ReviewRepository {
     override suspend fun replayLogs(cardId: String): ReviewCard = unsupported()
 
     override suspend fun getQueueItem(cardId: String): ReviewQueueItem = unsupported()
+
+    override suspend fun inspectReviewDataIntegrity(): ReviewDataIntegrityReport =
+        ReviewDataIntegrityReport(
+            cardsWithLogs = 0,
+            missingCacheCount = 0,
+            inconsistentCacheCount = 0,
+            legacyLogCardCount = 0,
+        )
+
+    override suspend fun repairReviewDataCache(): ReviewDataRepairResult =
+        ReviewDataRepairResult(
+            before = inspectReviewDataIntegrity(),
+            after = inspectReviewDataIntegrity(),
+            repairedCount = 0,
+        )
 }
 
 private class FakeSettingsRepository : SettingsRepository {

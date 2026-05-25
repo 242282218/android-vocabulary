@@ -39,6 +39,7 @@ class DailyStatsCacheRebuildTest {
     fun rebuildDailyStatsCacheDerivesCountsFromLogsAndClearsStaleRows() =
         runTest {
             val updatedAt = Instant.parse("2026-05-16T10:00:00Z")
+            seedWordMembership(updatedAt)
             database.statsDao().upsertDailyStats(staleDailyStats(updatedAt))
             database.reviewDao().insertLog(
                 reviewLog(
@@ -88,6 +89,21 @@ class DailyStatsCacheRebuildTest {
             assertEquals(emptyList<DailyStatsEntity>(), database.exportDao().dailyStats())
         }
 
+    @Test
+    fun cardStatsQueriesIgnoreCardsWithoutMembership() =
+        runTest {
+            val now = Instant.parse("2026-05-16T10:00:00Z")
+            seedWordMembership(now)
+            database.reviewDao().upsertCard(reviewCard("valid-card", WORD_ID, now))
+            database.reviewDao().upsertCard(reviewCard("orphan-card", "orphan-word", now))
+
+            val dueCards = database.statsDao().observeDueCards(now.plusSeconds(86_400)).first()
+            val reviewedCards = database.statsDao().observeReviewedCards(now.minusSeconds(86_400)).first()
+
+            assertEquals(1, dueCards.size)
+            assertEquals(listOf("valid-card"), reviewedCards.map { it.id })
+        }
+
     private fun reviewLog(
         id: String,
         rating: ReviewRating,
@@ -132,6 +148,64 @@ class DailyStatsCacheRebuildTest {
             estimatedMinutes = 9,
             updatedAt = updatedAt,
         )
+
+    private fun reviewCard(
+        id: String,
+        wordId: String,
+        now: Instant,
+    ): ReviewCardEntity =
+        ReviewCardEntity(
+            id = id,
+            wordId = wordId,
+            bookCode = BookCode.CET4.name,
+            state = "Review",
+            difficulty = 5.0,
+            stability = 10.0,
+            retrievability = 0.9,
+            scheduledDays = 10,
+            dueAt = now.plusSeconds(3_600),
+            lastReviewAt = now.minusSeconds(3_600),
+            reviewCount = 1,
+            lapseCount = 0,
+            firstReviewedAt = now.minusSeconds(3_600),
+            createdAt = now.minusSeconds(3_600),
+            updatedAt = now,
+        )
+
+    private suspend fun seedWordMembership(now: Instant) {
+        database.wordDao().upsertWords(
+            listOf(
+                WordEntryEntity(
+                    id = WORD_ID,
+                    word = "access",
+                    meaning = "入口",
+                    phonetic = null,
+                    partOfSpeech = null,
+                    definition = null,
+                    cefrLevel = null,
+                    cefrRank = 0.0,
+                    frequency = 0.0,
+                    sourceFlagsJson = "[]",
+                    coverageTier = null,
+                    createdAt = now,
+                    updatedAt = now,
+                ),
+            ),
+        )
+        database.wordDao().upsertMemberships(
+            listOf(
+                WordBookMembershipEntity(
+                    wordId = WORD_ID,
+                    bookCode = BookCode.CET4.name,
+                    orderIndex = 0,
+                    examFrequencyScore = 0.0,
+                    examPriorityScore = 0.0,
+                    isPhraseBacked = false,
+                    phraseCount = 0,
+                ),
+            ),
+        )
+    }
 
     private companion object {
         const val WORD_ID = "word-1"

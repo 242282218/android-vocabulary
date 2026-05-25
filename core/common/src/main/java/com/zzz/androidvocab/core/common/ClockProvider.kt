@@ -1,6 +1,5 @@
 package com.zzz.androidvocab.core.common
 
-import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -19,9 +18,7 @@ interface ClockProvider {
 class SystemClockProvider
     @Inject
     constructor() : ClockProvider {
-        private val clock: Clock = Clock.systemDefaultZone()
+        override fun now(): Instant = Instant.now()
 
-        override fun now(): Instant = clock.instant()
-
-        override fun zoneId(): ZoneId = clock.zone
+        override fun zoneId(): ZoneId = ZoneId.systemDefault()
     }

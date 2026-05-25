@@ -16,7 +16,10 @@ import com.zzz.androidvocab.core.database.WordBookMembershipEntity
 import com.zzz.androidvocab.core.database.WordDao
 import com.zzz.androidvocab.core.database.WordEntryEntity
 import com.zzz.androidvocab.core.database.toModel
+import com.zzz.androidvocab.core.domain.SettingsRepository
 import com.zzz.androidvocab.core.domain.VocabularyRepository
+import com.zzz.androidvocab.core.domain.calculateBookProgress
+import com.zzz.androidvocab.core.domain.filterWordsByStatus
 import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.BookProgress
 import com.zzz.androidvocab.core.model.ImportResult
@@ -24,11 +27,13 @@ import com.zzz.androidvocab.core.model.SourceInfo
 import com.zzz.androidvocab.core.model.WordDetail
 import com.zzz.androidvocab.core.model.WordEntry
 import com.zzz.androidvocab.core.model.WordStatusFilter
+import com.zzz.androidvocab.core.scheduler.ReviewScheduler
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -36,6 +41,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.security.MessageDigest
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -47,7 +53,9 @@ class AssetVocabularyRepository
         private val database: VocabDatabase,
         private val wordDao: WordDao,
         private val reviewDao: ReviewDao,
+        private val scheduler: ReviewScheduler,
         private val clockProvider: ClockProvider,
+        private val settingsRepository: SettingsRepository,
     ) : VocabularyRepository {
         private val json =
             Json {
@@ -56,7 +64,23 @@ class AssetVocabularyRepository
             }
 
         override fun observeBookProgress(now: Instant): Flow<List<BookProgress>> =
-            wordDao.observeBookProgress(now).map { rows -> rows.map { it.toModel() } }
+            combine(
+                wordDao.observeMembershipCounts(),
+                wordDao.observeValidReviewCards(),
+                settingsRepository.settings,
+            ) { totals, cards, settings ->
+                val totalByBook =
+                    totals
+                        .mapNotNull { row ->
+                            row.bookCode.toBookCodeOrNull()?.let { book -> book to row.count }
+                        }.toMap()
+                calculateBookProgress(
+                    totals = totalByBook,
+                    cards = cards.map { it.toModel() },
+                    now = now,
+                    retrievability = { card -> scheduler.retrievability(card, now, settings.targetRetention) },
+                )
+            }
 
         override fun searchWords(
             query: String,
@@ -64,9 +88,20 @@ class AssetVocabularyRepository
             statusFilter: WordStatusFilter,
             now: Instant,
         ): Flow<List<WordEntry>> =
-            wordDao
-                .searchWords(escapeLikeWildcards(query.trim()), bookCodes.toSearchNames(), statusFilter.name, now)
-                .map { rows -> rows.map { it.toModel() } }
+            combine(
+                wordDao.searchWords(escapeLikeWildcards(query.trim()), bookCodes.toSearchNames()),
+                wordDao.observeValidReviewCards(),
+                settingsRepository.settings,
+            ) { rows, cards, settings ->
+                filterWordsByStatus(
+                    words = rows.map { it.toModel() },
+                    cards = cards.map { it.toModel() },
+                    selectedBooks = bookCodes.ifEmpty { BookCode.entries.toSet() },
+                    statusFilter = statusFilter,
+                    now = now,
+                    retrievability = { card -> scheduler.retrievability(card, now, settings.targetRetention) },
+                ).take(SEARCH_RESULT_LIMIT)
+            }
 
         override fun observeWordDetail(wordId: String): Flow<WordDetail?> =
             combine(
@@ -121,7 +156,9 @@ class AssetVocabularyRepository
                         )
                     } else {
                         val sourcesText = readAsset("vocab/sources.json")
+                        val sourcesHash = validateSourcesHash(manifest, sourcesText)
                         val sourceManifest = json.decodeFromString<AssetSourceManifest>(sourcesText)
+                        val bookHashes = mutableMapOf<BookCode, String>()
                         val rows =
                             BookCode.entries.associateWith { book ->
                                 val bookManifest =
@@ -129,13 +166,14 @@ class AssetVocabularyRepository
                                         ?: throw AppException(
                                             AppError.VocabularyImportFailed("Missing manifest entry: ${book.name}"),
                                         )
-                                val entries =
-                                    json.decodeFromString<List<AssetWordEntry>>(
-                                        readAsset("vocab/${bookManifest.file}"),
-                                    )
-                                validateBook(book, bookManifest, entries)
+                                val entriesText = readAsset("vocab/${bookManifest.file}")
+                                val entries = json.decodeFromString<List<AssetWordEntry>>(entriesText)
+                                val bookHash = sha256Hex(entriesText)
+                                validateBook(book, bookManifest, entries, bookHash)
+                                bookHashes[book] = bookHash
                                 entries
                             }
+                        validateAssetFingerprint(manifest, bookHashes, sourcesHash)
                         database.withTransaction {
                             wordDao.deleteAliases()
                             wordDao.deleteMemberships()
@@ -177,6 +215,7 @@ class AssetVocabularyRepository
                                         json.encodeToString(
                                             bookCounts.mapKeys { it.key.name },
                                         ),
+                                    assetFingerprint = manifest.assetFingerprint,
                                     importedWords = wordDao.wordCount(),
                                     memberships = bookCounts.values.sum(),
                                     importedAt = now,
@@ -191,6 +230,7 @@ class AssetVocabularyRepository
                         }
                     }
                 }.getOrElse { error ->
+                    if (error is CancellationException) throw error
                     if (error is AppException) throw error
                     throw AppException(
                         AppError.VocabularyImportFailed(error.message ?: "Import failed"),
@@ -209,15 +249,45 @@ class AssetVocabularyRepository
             book: BookCode,
             manifest: VocabManifestBook,
             entries: List<AssetWordEntry>,
+            fileHash: String,
         ) {
             val errorReason =
                 bookValidationError(
                     book = book,
                     manifest = manifest,
                     entries = entries,
+                    fileHash = fileHash,
                 )
             if (errorReason != null) {
                 throw AppException(AppError.VocabularyImportFailed(errorReason))
+            }
+        }
+
+        private fun validateSourcesHash(
+            manifest: VocabManifest,
+            sourcesText: String,
+        ): String {
+            if (manifest.sourcesHash.isBlank()) {
+                throw AppException(AppError.VocabularyImportFailed("sources hash is missing"))
+            }
+            val sourcesHash = sha256Hex(sourcesText)
+            if (!manifest.sourcesHash.equals(sourcesHash, ignoreCase = true)) {
+                throw AppException(AppError.VocabularyImportFailed("sources hash mismatch"))
+            }
+            return sourcesHash
+        }
+
+        private fun validateAssetFingerprint(
+            manifest: VocabManifest,
+            bookHashes: Map<BookCode, String>,
+            sourcesHash: String,
+        ) {
+            if (manifest.assetFingerprint.isBlank()) {
+                throw AppException(AppError.VocabularyImportFailed("asset fingerprint is missing"))
+            }
+            val actualFingerprint = assetFingerprint(bookHashes, sourcesHash)
+            if (!manifest.assetFingerprint.equals(actualFingerprint, ignoreCase = true)) {
+                throw AppException(AppError.VocabularyImportFailed("asset fingerprint mismatch"))
             }
         }
 
@@ -225,6 +295,7 @@ class AssetVocabularyRepository
             book: BookCode,
             manifest: VocabManifestBook,
             entries: List<AssetWordEntry>,
+            fileHash: String,
         ): String? {
             if (
                 manifest.count != book.expectedPublishSafeCount ||
@@ -232,9 +303,15 @@ class AssetVocabularyRepository
             ) {
                 return "${book.name} count mismatch"
             }
+            if (manifest.hash.isBlank()) {
+                return "${book.name} hash is missing"
+            }
+            if (!manifest.hash.equals(fileHash, ignoreCase = true)) {
+                return "${book.name} hash mismatch"
+            }
             val blocking =
                 entries.firstOrNull { row ->
-                    row.sourceFlags.any { it == "kylebing" || it == "netem" }
+                    row.sourceFlags.any { it.trim().lowercase() in PUBLISH_BLOCKING_SOURCE_FLAGS }
                 }
             if (blocking != null) {
                 return "${book.name} contains publish-blocking source flags"
@@ -285,8 +362,11 @@ internal fun isCurrentPublishSafeImport(
     if (!hasSourceManifest || latestImportRun == null) return false
     if (manifest.buildTarget != "publish" || latestImportRun.buildTarget != "publish") return false
     if (latestImportRun.generatedAt != manifest.generatedAt) return false
+    if (manifest.assetFingerprint.isBlank()) return false
+    if (latestImportRun.assetFingerprint != manifest.assetFingerprint) return false
     return BookCode.entries.all { book ->
         manifest.books[book.name]?.count == book.expectedPublishSafeCount &&
+            manifest.books[book.name]?.hash?.isNotBlank() == true &&
             bookCounts[book] == book.expectedPublishSafeCount
     }
 }
@@ -295,6 +375,25 @@ private fun String.toBookCodeOrNull(): BookCode? = BookCode.entries.firstOrNull 
 
 private const val UTF8_BOM = "\uFEFF"
 private const val MAX_ALIAS_LENGTH = 80
+private const val SEARCH_RESULT_LIMIT = 80
+private val PUBLISH_BLOCKING_SOURCE_FLAGS = setOf("kylebing", "netem")
+
+private fun sha256Hex(value: String): String {
+    val normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    val digest = MessageDigest.getInstance("SHA-256").digest(normalized.toByteArray(Charsets.UTF_8))
+    return digest.joinToString("") { byte -> "%02x".format(byte) }
+}
+
+private fun assetFingerprint(
+    bookHashes: Map<BookCode, String>,
+    sourcesHash: String,
+): String {
+    val input =
+        BookCode.entries.joinToString(separator = ";") { book ->
+            "${book.name}=${bookHashes.getValue(book)}"
+        } + ";sources=$sourcesHash"
+    return sha256Hex(input)
+}
 
 internal fun AssetWordEntry.searchAliasValues(): List<String> =
     (aliases + altMeanings)

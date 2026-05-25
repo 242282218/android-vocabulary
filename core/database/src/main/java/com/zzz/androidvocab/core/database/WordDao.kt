@@ -56,32 +56,24 @@ interface WordDao {
 
     @Query(
         """
-        WITH selected_word_status AS (
+        SELECT c.*
+        FROM review_cards c
+        WHERE EXISTS (
+          SELECT 1 FROM wordbook_memberships m
+          WHERE m.wordId = c.wordId AND m.bookCode = c.bookCode
+        )
+        """,
+    )
+    fun observeValidReviewCards(): Flow<List<ReviewCardEntity>>
+
+    @Query(
+        """
+        WITH selected_words AS (
           SELECT
             w.id AS wordId,
-            MIN(m.orderIndex) AS firstOrderIndex,
-            SUM(CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END) AS learnedCount,
-            MAX(CASE WHEN c.state IN ('New', 'Learning', 'Relearning') THEN 1 ELSE 0 END) AS hasLearning,
-            MAX(CASE WHEN c.dueAt IS NOT NULL AND c.dueAt <= :now THEN 1 ELSE 0 END) AS hasDue,
-            MAX(
-              CASE
-                WHEN c.state IN ('Review', 'Mastered')
-                  AND (c.dueAt IS NULL OR c.dueAt > :now)
-                  AND NOT (c.scheduledDays >= 21 AND IFNULL(c.retrievability, 0) >= 0.85)
-                THEN 1 ELSE 0
-              END
-            ) AS hasFamiliar,
-            MAX(
-              CASE
-                WHEN c.scheduledDays >= 21
-                  AND IFNULL(c.retrievability, 0) >= 0.85
-                  AND (c.dueAt IS NULL OR c.dueAt > :now)
-                THEN 1 ELSE 0
-              END
-            ) AS hasMastered
+            MIN(m.orderIndex) AS firstOrderIndex
           FROM wordbook_memberships m
           JOIN word_entries w ON w.id = m.wordId
-          LEFT JOIN review_cards c ON c.wordId = m.wordId AND c.bookCode = m.bookCode
           WHERE m.bookCode IN (:bookCodes)
           AND (
             :query = ''
@@ -95,24 +87,13 @@ interface WordDao {
           GROUP BY w.id
         )
         SELECT w.* FROM word_entries w
-        JOIN selected_word_status s ON s.wordId = w.id
-        WHERE (
-          :status = 'All'
-          OR (:status = 'Unlearned' AND s.learnedCount = 0)
-          OR (:status = 'Learning' AND s.hasLearning = 1)
-          OR (:status = 'Due' AND s.hasDue = 1)
-          OR (:status = 'Familiar' AND s.hasFamiliar = 1)
-          OR (:status = 'Mastered' AND s.hasMastered = 1)
-        )
+        JOIN selected_words s ON s.wordId = w.id
         ORDER BY s.firstOrderIndex ASC, w.frequency DESC, w.word ASC
-        LIMIT 80
         """,
     )
     fun searchWords(
         query: String,
         bookCodes: List<String>,
-        status: String,
-        now: Instant,
     ): Flow<List<WordEntryEntity>>
 
     @Query("SELECT * FROM word_entries WHERE id = :wordId")

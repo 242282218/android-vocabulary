@@ -139,6 +139,7 @@ data class VocabularyImportRunEntity(
     val buildTarget: String,
     val generatedAt: String,
     val bookCountsJson: String,
+    val assetFingerprint: String,
     val importedWords: Int,
     val memberships: Int,
     val importedAt: Instant,

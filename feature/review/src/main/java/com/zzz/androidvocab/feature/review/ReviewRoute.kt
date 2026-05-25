@@ -3,6 +3,7 @@ package com.zzz.androidvocab.feature.review
 import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -46,7 +47,6 @@ import com.zzz.androidvocab.core.designsystem.WarmHeroCard
 import com.zzz.androidvocab.core.model.ReviewQueueItem
 import com.zzz.androidvocab.core.model.ReviewRating
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicBoolean
 
 @Composable
 fun ReviewRoute(viewModel: ReviewViewModel = hiltViewModel()) {
@@ -138,9 +138,10 @@ fun ReviewScreen(
             }
         }
         uiState.errorMessage?.let {
+            val isDark = isSystemInDarkTheme()
             VocabCard(
                 elevated = false,
-                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.24f),
+                containerColor = if (isDark) VocabColors.ErrorCardBackgroundDark else VocabColors.ErrorCardBackground,
                 borderColor = MaterialTheme.colorScheme.error.copy(alpha = 0.24f),
             ) {
                 Text("反馈没有保存，当前卡片已保留。", style = MaterialTheme.typography.titleMedium)
@@ -246,31 +247,31 @@ private fun AnswerBlock(item: ReviewQueueItem) {
 @Composable
 private fun rememberWordSpeaker(): (String) -> Unit {
     val context = LocalContext.current
-    val ttsState = remember { mutableStateOf<TextToSpeech?>(null) }
-    val isReady = remember { AtomicBoolean(false) }
-    DisposableEffect(context) {
+    val ttsRef = remember { mutableStateOf<TextToSpeech?>(null) }
+    val isReady = remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
         var engine: TextToSpeech? = null
         engine =
             TextToSpeech(context.applicationContext) { status ->
                 if (status == TextToSpeech.SUCCESS) {
                     val languageResult = engine?.setLanguage(Locale.US)
-                    isReady.set(
+                    isReady.value =
+                        languageResult != null &&
                         languageResult != TextToSpeech.LANG_MISSING_DATA &&
-                            languageResult != TextToSpeech.LANG_NOT_SUPPORTED,
-                    )
+                        languageResult != TextToSpeech.LANG_NOT_SUPPORTED
                 }
             }
-        ttsState.value = engine
+        ttsRef.value = engine
         onDispose {
-            isReady.set(false)
+            isReady.value = false
             engine?.stop()
             engine?.shutdown()
-            ttsState.value = null
+            ttsRef.value = null
         }
     }
     return { word ->
-        if (isReady.get()) {
-            ttsState.value?.speak(word, TextToSpeech.QUEUE_FLUSH, null, "review-word-$word")
+        if (isReady.value) {
+            ttsRef.value?.speak(word, TextToSpeech.QUEUE_FLUSH, null, "review-word-$word")
         }
     }
 }

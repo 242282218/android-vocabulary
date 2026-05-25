@@ -16,6 +16,7 @@ data class ScheduleInput(
     val zoneId: ZoneId,
     val targetRetention: Double,
     val durationMs: Long,
+    val enableFuzzing: Boolean = true,
 )
 
 data class ReviewLogPatch(
@@ -43,5 +44,8 @@ interface ReviewScheduler {
     fun retrievability(
         card: ReviewCard,
         now: Instant,
+        targetRetention: Double = FSRS_DEFAULT_RETENTION,
     ): Double? = card.retrievability
 }
+
+const val FSRS_DEFAULT_RETENTION = 0.9

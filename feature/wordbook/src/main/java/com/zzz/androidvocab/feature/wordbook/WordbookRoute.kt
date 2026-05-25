@@ -20,6 +20,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -143,7 +144,9 @@ fun WordbookScreen(
                 )
             } else {
                 shownWords.forEach { word ->
-                    WordRow(word = word, onClick = { onSelectWord(word.id) })
+                    key(word.id) {
+                        WordRow(word = word, onClick = { onSelectWord(word.id) })
+                    }
                 }
             }
         }

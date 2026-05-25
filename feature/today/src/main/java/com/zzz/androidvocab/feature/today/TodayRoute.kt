@@ -68,6 +68,7 @@ fun TodayScreen(
                 VocabEmptyState(title = "词库导入失败", body = it)
                 PrimaryAction("重试导入", onRetryImport, Modifier.fillMaxWidth())
             }
+            return@VocabScreen
         }
         val overview = uiState.overview
         if (overview != null) {
@@ -170,7 +171,7 @@ private fun TodayProgress(overview: TodayOverview) {
     val total = overview.stats.completedCount + overview.queue.totalCount
     val fraction =
         if (total == 0) {
-            1f
+            0f
         } else {
             overview.stats.completedCount.toFloat() / total.toFloat()
         }

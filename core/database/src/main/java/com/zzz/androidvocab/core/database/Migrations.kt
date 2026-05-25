@@ -73,3 +73,42 @@ val MIGRATION_2_3 =
             db.execSQL("ALTER TABLE `review_logs` ADD COLUMN `dueAtAfter` TEXT")
         }
     }
+
+val MIGRATION_3_4 =
+    object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE `vocabulary_import_runs` ADD COLUMN `assetFingerprint` TEXT NOT NULL DEFAULT ''",
+            )
+        }
+    }
+
+val MIGRATION_4_5 =
+    object : Migration(4, 5) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE VIEW IF NOT EXISTS `valid_review_logs` AS
+                SELECT l.* FROM review_logs l
+                JOIN wordbook_memberships m ON m.wordId = l.wordId AND m.bookCode = l.bookCode
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE VIEW IF NOT EXISTS `word_card_view` AS
+                SELECT c.id AS cardId, m.wordId, m.bookCode,
+                  c.state, c.difficulty, c.stability, c.retrievability,
+                  c.scheduledDays, c.dueAt, c.lastReviewAt,
+                  c.reviewCount, c.lapseCount, c.firstReviewedAt,
+                  c.createdAt AS cardCreatedAt, c.updatedAt AS cardUpdatedAt,
+                  w.word, w.meaning, w.phonetic, w.partOfSpeech, w.definition,
+                  w.cefrLevel, w.cefrRank, w.frequency, w.sourceFlagsJson, w.coverageTier,
+                  w.createdAt AS wordCreatedAt, w.updatedAt AS wordUpdatedAt,
+                  m.orderIndex
+                FROM wordbook_memberships m
+                JOIN word_entries w ON w.id = m.wordId
+                LEFT JOIN review_cards c ON c.wordId = m.wordId AND c.bookCode = m.bookCode
+                """.trimIndent(),
+            )
+        }
+    }

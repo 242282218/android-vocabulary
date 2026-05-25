@@ -18,6 +18,30 @@ import com.zzz.androidvocab.core.common.cardId as createCardId
 
 private val mapperJson = Json { ignoreUnknownKeys = true }
 
+private inline fun <reified T : Enum<T>> safeValueOf(
+    name: String,
+    fallback: T,
+): T =
+    try {
+        enumValueOf<T>(name)
+    } catch (_: IllegalArgumentException) {
+        fallback
+    }
+
+private fun safeBookCode(name: String): BookCode = safeValueOf(name, BookCode.CET4)
+
+private fun safeReviewState(name: String): ReviewState = safeValueOf(name, ReviewState.New)
+
+private fun safeReviewRating(wireName: String): ReviewRating =
+    ReviewRating.entries.find { it.wireName == wireName } ?: ReviewRating.Again
+
+private fun parseSourceFlags(payload: String): List<String> {
+    if (payload.isBlank()) return emptyList()
+    return runCatching {
+        mapperJson.parseToJsonElement(payload).jsonArray.map { it.jsonPrimitive.content }
+    }.getOrDefault(emptyList())
+}
+
 fun WordEntryEntity.toModel(): WordEntry =
     WordEntry(
         id = id,
@@ -29,14 +53,14 @@ fun WordEntryEntity.toModel(): WordEntry =
         cefrLevel = cefrLevel,
         cefrRank = cefrRank,
         frequency = frequency,
-        sourceFlags = mapperJson.parseToJsonElement(sourceFlagsJson).jsonArray.map { it.jsonPrimitive.content },
+        sourceFlags = parseSourceFlags(sourceFlagsJson),
         coverageTier = coverageTier,
     )
 
 fun WordBookMembershipEntity.toModel(): WordBookMembership =
     WordBookMembership(
         wordId = wordId,
-        bookCode = BookCode.valueOf(bookCode),
+        bookCode = safeBookCode(bookCode),
         orderIndex = orderIndex,
         examFrequencyScore = examFrequencyScore,
         examPriorityScore = examPriorityScore,
@@ -48,8 +72,8 @@ fun ReviewCardEntity.toModel(): ReviewCard =
     ReviewCard(
         id = id,
         wordId = wordId,
-        bookCode = BookCode.valueOf(bookCode),
-        state = ReviewState.valueOf(state),
+        bookCode = safeBookCode(bookCode),
+        state = safeReviewState(state),
         difficulty = difficulty,
         stability = stability,
         retrievability = retrievability,
@@ -87,8 +111,8 @@ fun ReviewLogEntity.toModel(): ReviewLog =
         id = id,
         cardId = cardId,
         wordId = wordId,
-        bookCode = BookCode.valueOf(bookCode),
-        rating = ReviewRating.entries.first { it.wireName == rating },
+        bookCode = safeBookCode(bookCode),
+        rating = safeReviewRating(rating),
         reviewedAt = reviewedAt,
         localDay = localDay,
         elapsedDays = elapsedDays,
@@ -104,7 +128,7 @@ fun ReviewLogEntity.toModel(): ReviewLog =
         targetRetention = targetRetention,
         algorithm = algorithm,
         algorithmVersion = algorithmVersion,
-        stateAfter = stateAfter?.let(ReviewState::valueOf),
+        stateAfter = stateAfter?.let(::safeReviewState),
         dueAtAfter = dueAtAfter,
     )
 
@@ -114,8 +138,8 @@ fun ReviewQueueRow.toQueueItem(now: Instant): ReviewQueueItem {
         ReviewCard(
             id = actualCardId,
             wordId = wordId,
-            bookCode = BookCode.valueOf(bookCode),
-            state = state?.let(ReviewState::valueOf) ?: ReviewState.New,
+            bookCode = safeBookCode(bookCode),
+            state = state?.let(::safeReviewState) ?: ReviewState.New,
             difficulty = difficulty,
             stability = stability,
             retrievability = retrievability,
@@ -141,7 +165,7 @@ fun ReviewQueueRow.toQueueItem(now: Instant): ReviewQueueItem {
                 cefrLevel = cefrLevel,
                 cefrRank = cefrRank,
                 frequency = frequency,
-                sourceFlags = mapperJson.parseToJsonElement(sourceFlagsJson).jsonArray.map { it.jsonPrimitive.content },
+                sourceFlags = parseSourceFlags(sourceFlagsJson),
                 coverageTier = coverageTier,
             ),
         isNew = cardId == null,
@@ -150,7 +174,7 @@ fun ReviewQueueRow.toQueueItem(now: Instant): ReviewQueueItem {
 
 fun BookProgressRow.toModel() =
     BookProgress(
-        bookCode = BookCode.valueOf(bookCode),
+        bookCode = safeBookCode(bookCode),
         totalCount = totalCount,
         learnedCount = learnedCount,
         masteredCount = masteredCount,
@@ -161,7 +185,7 @@ fun BookStatsRow.toModel() =
     BookStats(
         progress =
             BookProgress(
-                bookCode = BookCode.valueOf(bookCode),
+                bookCode = safeBookCode(bookCode),
                 totalCount = totalCount,
                 learnedCount = learnedCount,
                 masteredCount = masteredCount,

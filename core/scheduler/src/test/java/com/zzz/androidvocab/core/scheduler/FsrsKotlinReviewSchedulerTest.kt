@@ -38,10 +38,27 @@ class FsrsKotlinReviewSchedulerTest {
     @Test
     fun retrievabilityUsesCurrentTime() {
         val reviewed = scheduler.schedule(input(ReviewRating.Good)).nextCard
-        val later = scheduler.retrievability(reviewed, (reviewed.dueAt ?: now).plusSeconds(86_400))
+        val later =
+            scheduler.retrievability(
+                reviewed,
+                (reviewed.dueAt ?: now).plusSeconds(86_400),
+                targetRetention = 0.9,
+            )
 
         assertTrue(later != null)
         assertTrue((later ?: 1.0) < (reviewed.retrievability ?: 1.0))
+    }
+
+    @Test
+    fun retrievabilityRespectsTargetRetention() {
+        val reviewed = scheduler.schedule(input(ReviewRating.Good)).nextCard
+        val sameTime = (reviewed.dueAt ?: now).minusSeconds(86_400)
+        val withLowRetention = scheduler.retrievability(reviewed, sameTime, targetRetention = 0.7)
+        val withHighRetention = scheduler.retrievability(reviewed, sameTime, targetRetention = 0.95)
+
+        assertTrue(withLowRetention != null)
+        assertTrue(withHighRetention != null)
+        assertTrue((withLowRetention ?: 1.0) <= (withHighRetention ?: 0.0))
     }
 
     @Test
@@ -57,10 +74,31 @@ class FsrsKotlinReviewSchedulerTest {
         assertTrue(utcResult.scheduledDays > shanghaiResult.scheduledDays)
     }
 
+    @Test
+    fun newCardWithoutDueUsesReviewedAtAsScheduleBaseline() {
+        val reviewedAt = Instant.parse("2026-05-16T08:00:00Z")
+        val createdAt = Instant.parse("2026-04-01T08:00:00Z")
+
+        val result =
+            scheduler
+                .schedule(
+                    input(
+                        rating = ReviewRating.Good,
+                        reviewedAt = reviewedAt,
+                        dueAt = null,
+                        createdAt = createdAt,
+                    ),
+                ).nextCard
+
+        assertTrue(result.scheduledDays in 0..7)
+    }
+
     private fun input(
         rating: ReviewRating,
         reviewedAt: Instant = now,
         zoneId: ZoneId = utc,
+        dueAt: Instant? = now,
+        createdAt: Instant = reviewedAt,
     ) = ScheduleInput(
         card =
             ReviewCard(
@@ -72,13 +110,13 @@ class FsrsKotlinReviewSchedulerTest {
                 stability = null,
                 retrievability = null,
                 scheduledDays = 0,
-                dueAt = now,
+                dueAt = dueAt,
                 lastReviewAt = null,
                 reviewCount = 0,
                 lapseCount = 0,
                 firstReviewedAt = null,
-                createdAt = reviewedAt,
-                updatedAt = reviewedAt,
+                createdAt = createdAt,
+                updatedAt = createdAt,
             ),
         rating = rating,
         reviewedAt = reviewedAt,

@@ -41,6 +41,7 @@ import com.zzz.androidvocab.feature.today.TodayScreen
 import com.zzz.androidvocab.feature.today.TodayUiState
 import com.zzz.androidvocab.feature.wordbook.WordbookScreen
 import com.zzz.androidvocab.feature.wordbook.WordbookUiState
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -99,7 +100,7 @@ class ScreenLayoutSmokeTest(
             )
         }
 
-        composeRule.onNodeWithText("词书").assertExists()
+        composeRule.onNodeWithText("至少保留一本词书；再次点选最后一本时会保持当前选择。").assertExists()
         composeRule.onNodeWithText("搜索单词或释义").assertExists()
         composeRule.onNodeWithText("ability").assertExists()
     }
@@ -154,7 +155,9 @@ class ScreenLayoutSmokeTest(
             }
         }
         composeRule.waitForIdle()
-        composeRule.onRoot().captureToImage()
+        val bitmap = composeRule.onRoot().captureToImage()
+        assertTrue("Captured bitmap width must be positive, got ${bitmap.width}", bitmap.width > 0)
+        assertTrue("Captured bitmap height must be positive, got ${bitmap.height}", bitmap.height > 0)
     }
 
     companion object {

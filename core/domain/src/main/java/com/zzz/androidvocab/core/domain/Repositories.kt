@@ -57,22 +57,9 @@ interface ReviewRepository {
 
     suspend fun getQueueItem(cardId: String): ReviewQueueItem
 
-    suspend fun inspectReviewDataIntegrity(): ReviewDataIntegrityReport =
-        ReviewDataIntegrityReport(
-            cardsWithLogs = 0,
-            missingCacheCount = 0,
-            inconsistentCacheCount = 0,
-            legacyLogCardCount = 0,
-        )
+    suspend fun inspectReviewDataIntegrity(): ReviewDataIntegrityReport
 
-    suspend fun repairReviewDataCache(): ReviewDataRepairResult {
-        val report = inspectReviewDataIntegrity()
-        return ReviewDataRepairResult(
-            before = report,
-            after = report,
-            repairedCount = 0,
-        )
-    }
+    suspend fun repairReviewDataCache(): ReviewDataRepairResult
 }
 
 interface StatsRepository {

@@ -33,7 +33,7 @@ class ReviewViewModel
         private val submitReviewFeedbackUseCase: SubmitReviewFeedbackUseCase,
         private val clockProvider: ClockProvider,
     ) : ViewModel() {
-        private val isBackVisible = MutableStateFlow(false)
+        private val visibleBackCardId = MutableStateFlow<String?>(null)
         private val isSubmitting = MutableStateFlow(false)
         private val errorMessage = MutableStateFlow<String?>(null)
 
@@ -43,24 +43,29 @@ class ReviewViewModel
         val uiState =
             combine(
                 getTodayQueueUseCase(),
-                isBackVisible,
+                visibleBackCardId,
                 isSubmitting,
                 errorMessage,
-            ) { queue, backVisible, submitting, error ->
+            ) { queue, backCardId, submitting, error ->
+                val item = queue.items.firstOrNull()
                 ReviewUiState(
-                    item = queue.items.firstOrNull(),
+                    item = item,
                     remainingCount = queue.totalCount,
-                    isBackVisible = backVisible,
+                    isBackVisible = item?.card?.id == backCardId,
                     isSubmitting = submitting,
                     errorMessage = error,
                 )
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReviewUiState())
 
         fun showBack() {
-            if (!isBackVisible.value) {
+            val cardId =
+                uiState.value.item
+                    ?.card
+                    ?.id ?: return
+            if (visibleBackCardId.value != cardId) {
                 answerShownAtMs = clockProvider.now().toEpochMilli()
             }
-            isBackVisible.value = true
+            visibleBackCardId.value = cardId
         }
 
         fun submit(rating: ReviewRating) {
@@ -76,13 +81,14 @@ class ReviewViewModel
                 try {
                     submitReviewFeedbackUseCase(cardId, rating, durationMs)
                     answerShownAtMs = null
-                    isBackVisible.value = false
+                    visibleBackCardId.value = null
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     errorMessage.value = e.toUserMessage("反馈保存失败")
+                } finally {
+                    isSubmitting.value = false
                 }
-                isSubmitting.value = false
             }
         }
 

@@ -1,26 +1,33 @@
 {
     "buildTarget":  "publish",
     "generatedAt":  "2026-05-16",
+    "sourcesHash":  "f297871cc165986d5c13a7272b5684f34b15e8cb9b3f327cf501bdb2dc325c4b",
+    "assetFingerprint":  "e9e28f01be7ce93e3edb7acbed2b81c4ef0caa13f4686172ba51faadd8fdc5ca",
     "books":  {
                   "CET4":  {
                                "count":  3846,
-                               "file":  "cet4.json"
+                               "file":  "cet4.json",
+                               "hash":  "2a9be68f7d75c9b56067dad0d942d3f36ad32ece29eb71a48bfb517a3f65bd96"
                            },
                   "CET6":  {
                                "count":  5406,
-                               "file":  "cet6.json"
+                               "file":  "cet6.json",
+                               "hash":  "273b812512741fa7caeba73b93dd0f27fef80211c8a93afafdc379bd6f342380"
                            },
                   "KAOYAN":  {
                                  "count":  4801,
-                                 "file":  "kaoyan.json"
+                                 "file":  "kaoyan.json",
+                                 "hash":  "9939dfd7c7d3e6861351d25fcea31d2c44cee95a2ed3bf34428fd22366a8bfc1"
                              },
                   "IELTS":  {
                                 "count":  5038,
-                                "file":  "ielts.json"
+                                "file":  "ielts.json",
+                                "hash":  "8bea73bdb90979e165b3b9b2cf7fd1f39de6f266b57cab0a5581bb6cf1ae205c"
                             },
                   "TOEFL":  {
                                 "count":  6970,
-                                "file":  "toefl.json"
+                                "file":  "toefl.json",
+                                "hash":  "f673059f1bfc7295782e0db259882b13073eba8c716c0116c0c5f938794dc358"
                             }
               }
 }

@@ -5,11 +5,14 @@ import com.zzz.androidvocab.core.common.AppError
 import com.zzz.androidvocab.core.common.AppException
 import com.zzz.androidvocab.core.common.ClockProvider
 import com.zzz.androidvocab.core.domain.ExportRepository
+import com.zzz.androidvocab.core.domain.ReviewRepository
 import com.zzz.androidvocab.core.domain.SettingsRepository
 import com.zzz.androidvocab.core.domain.firstValue
 import com.zzz.androidvocab.core.model.AppSettings
 import com.zzz.androidvocab.core.model.ExportResult
+import com.zzz.androidvocab.core.model.ReviewDataIntegrityReport
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -30,6 +33,7 @@ class AndroidExportRepository
     constructor(
         @ApplicationContext private val context: Context,
         private val exportDao: ExportDao,
+        private val reviewRepository: ReviewRepository,
         private val settingsRepository: SettingsRepository,
         private val clockProvider: ClockProvider,
     ) : ExportRepository {
@@ -56,11 +60,12 @@ class AndroidExportRepository
                         buildJsonObject {
                             put("exportedAt", exportedAt.toString())
                             put("appVersion", appVersion())
-                            put("databaseVersion", 3)
+                            put("databaseVersion", VOCAB_DATABASE_VERSION)
                             put("vocabularyManifest", exportDao.sourceManifest()?.json.toJsonPayload())
                             put("latestImportRun", exportDao.latestImportRun()?.toJson() ?: JsonNull)
                             put("algorithm", "fsrs/java-fsrs-1.0.0")
                             put("settings", settingsJson)
+                            put("dataIntegrity", inspectDataIntegrity())
                             put(
                                 "reviewCards",
                                 buildJsonArray {
@@ -83,6 +88,7 @@ class AndroidExportRepository
                     output.writeText(json.encodeToString(payload))
                     ExportResult(fileName = fileName, absolutePath = output.absolutePath)
                 }.getOrElse { error ->
+                    if (error is CancellationException) throw error
                     if (error is AppException) throw error
                     throw AppException(AppError.ExportFailed(error.message ?: "Export failed"), error)
                 }
@@ -102,16 +108,21 @@ class AndroidExportRepository
             return exportsDir
         }
 
-        private fun String?.toJsonPayload(): JsonElement {
-            if (isNullOrBlank()) return JsonNull
-            return runCatching { json.parseToJsonElement(this) }.getOrElse { JsonPrimitive(this) }
-        }
-
         private fun appVersion(): String =
             runCatching {
                 val info = context.packageManager.getPackageInfo(context.packageName, 0)
                 info.versionName ?: "0.1.0"
             }.getOrDefault("0.1.0")
+
+        private suspend fun inspectDataIntegrity(): JsonObject =
+            runCatching { reviewRepository.inspectReviewDataIntegrity().toJson() }
+                .getOrElse { error ->
+                    if (error is CancellationException) throw error
+                    buildJsonObject {
+                        put("status", "unavailable")
+                        put("error", error.message ?: "Data integrity inspection failed")
+                    }
+                }
     }
 
 private fun AppSettings.toJson(): JsonObject =
@@ -135,11 +146,17 @@ private fun VocabularyImportRunEntity.toJson(): JsonObject =
         put("id", id)
         put("buildTarget", buildTarget)
         put("generatedAt", generatedAt)
-        put("bookCounts", Json.parseToJsonElement(bookCountsJson))
+        put("bookCounts", bookCountsJson.toJsonPayload())
+        put("assetFingerprint", assetFingerprint)
         put("importedWords", importedWords)
         put("memberships", memberships)
         put("importedAt", importedAt.toString())
     }
+
+private fun String?.toJsonPayload(): JsonElement {
+    if (isNullOrBlank()) return JsonNull
+    return runCatching { Json.parseToJsonElement(this) }.getOrElse { JsonPrimitive(this) }
+}
 
 private fun ReviewCardEntity.toJson(): JsonObject =
     buildJsonObject {
@@ -184,6 +201,19 @@ private fun ReviewLogEntity.toJson(): JsonObject =
         put("algorithmVersion", algorithmVersion)
         put("stateAfter", stateAfter)
         put("dueAtAfter", dueAtAfter?.toString())
+    }
+
+private fun ReviewDataIntegrityReport.toJson(): JsonObject =
+    buildJsonObject {
+        put("status", if (issueCount == 0) "ok" else "issues")
+        put("cardsWithLogs", cardsWithLogs)
+        put("missingCacheCount", missingCacheCount)
+        put("inconsistentCacheCount", inconsistentCacheCount)
+        put("legacyLogCardCount", legacyLogCardCount)
+        put("orphanLogCount", orphanLogCount)
+        put("repairableIssueCount", repairableIssueCount)
+        put("manualReviewIssueCount", manualReviewIssueCount)
+        put("issueCount", issueCount)
     }
 
 private fun ExportDailyStatsRow.toJson(updatedAt: java.time.Instant): JsonObject {

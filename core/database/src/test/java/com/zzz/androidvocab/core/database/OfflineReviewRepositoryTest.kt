@@ -217,7 +217,8 @@ class OfflineReviewRepositoryTest {
             assertEquals(1, report.missingCacheCount)
             assertEquals(1, report.inconsistentCacheCount)
             assertEquals(1, report.legacyLogCardCount)
-            assertEquals(2, report.issueCount)
+            assertEquals(3, report.issueCount)
+            assertEquals(2, report.repairableIssueCount)
         }
 
     @Test
@@ -242,8 +243,10 @@ class OfflineReviewRepositoryTest {
 
             assertEquals(1, result.before.missingCacheCount)
             assertEquals(1, result.before.inconsistentCacheCount)
+            assertEquals(2, result.before.repairableIssueCount)
             assertEquals(2, result.repairedCount)
             assertEquals(0, result.after.issueCount)
+            assertEquals(0, result.after.repairableIssueCount)
             assertEquals(expectedMissing.scheduledDays, repairedMissing.scheduledDays)
             assertEquals(expectedMissing.dueAt, repairedMissing.dueAt)
             assertEquals(expectedStale.lapseCount, repairedStale.lapseCount)
@@ -263,9 +266,47 @@ class OfflineReviewRepositoryTest {
             assertEquals(1, result.before.cardsWithLogs)
             assertEquals(1, result.before.missingCacheCount)
             assertEquals(1, result.before.legacyLogCardCount)
+            assertEquals(2, result.before.issueCount)
+            assertEquals(0, result.before.repairableIssueCount)
             assertEquals(0, result.repairedCount)
             assertEquals(1, result.after.missingCacheCount)
             assertEquals(null, database.reviewDao().getCard(legacyId))
+        }
+
+    @Test
+    fun inspectReviewDataIntegrityReportsOrphanLogs() =
+        runTest {
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "orphan-log",
+                    cardId = cardId("orphan-word", BookCode.CET4.name),
+                    wordId = "orphan-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Good.wireName,
+                    reviewedAt = Instant.parse("2026-05-16T08:00:00Z"),
+                    localDay = "2026-05-16",
+                    elapsedDays = null,
+                    scheduledDaysBefore = 0,
+                    scheduledDaysAfter = 1,
+                    difficultyBefore = null,
+                    difficultyAfter = 5.0,
+                    stabilityBefore = null,
+                    stabilityAfter = 1.0,
+                    retrievabilityBefore = null,
+                    retrievabilityAfter = 0.9,
+                    durationMs = 500,
+                    targetRetention = 0.9,
+                    algorithm = "fsrs",
+                    algorithmVersion = "test",
+                ),
+            )
+
+            val report = repository.inspectReviewDataIntegrity()
+
+            assertEquals(0, report.cardsWithLogs)
+            assertEquals(1, report.orphanLogCount)
+            assertEquals(1, report.issueCount)
+            assertEquals(0, report.repairableIssueCount)
         }
 
     @Test
@@ -305,6 +346,51 @@ class OfflineReviewRepositoryTest {
             assertEquals(0, replayed.lapseCount)
             assertEquals(0.83, replayed.difficulty)
             assertEquals(reviewedAt, replayed.lastReviewAt)
+        }
+
+    @Test
+    fun replayLogsDisablesFuzzingForLegacyLogs() =
+        runTest {
+            RecordingScheduler.enableFuzzingValues.clear()
+            seedWord()
+            val id = cardId(WORD_ID, BookCode.CET4.name)
+            val reviewedAt = Instant.parse("2026-05-16T08:00:00Z")
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "legacy-log-no-fuzz",
+                    cardId = id,
+                    wordId = WORD_ID,
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Good.wireName,
+                    reviewedAt = reviewedAt,
+                    localDay = "2026-05-16",
+                    elapsedDays = null,
+                    scheduledDaysBefore = 0,
+                    scheduledDaysAfter = 10,
+                    difficultyBefore = null,
+                    difficultyAfter = 4.0,
+                    stabilityBefore = null,
+                    stabilityAfter = 10.0,
+                    retrievabilityBefore = null,
+                    retrievabilityAfter = 0.8,
+                    durationMs = 500,
+                    targetRetention = 0.83,
+                    algorithm = "fsrs",
+                    algorithmVersion = "legacy",
+                ),
+            )
+            val recordingRepository =
+                OfflineReviewRepository(
+                    database = database,
+                    reviewDao = database.reviewDao(),
+                    statsDao = database.statsDao(),
+                    scheduler = RecordingScheduler(),
+                    clockProvider = clock,
+                )
+
+            recordingRepository.replayLogs(id)
+
+            assertEquals(listOf(false), RecordingScheduler.enableFuzzingValues)
         }
 
     @Test
@@ -623,6 +709,48 @@ class OfflineReviewRepositoryTest {
                     ),
                 algorithmVersion = "test",
             )
+        }
+    }
+
+    private class RecordingScheduler : ReviewScheduler {
+        override val algorithm: SchedulerAlgorithm = SchedulerAlgorithm.Fsrs
+
+        override fun schedule(input: ScheduleInput): ScheduleResult {
+            enableFuzzingValues += input.enableFuzzing
+            val scheduledDays = 1
+            val nextCard =
+                input.card.copy(
+                    state = ReviewState.Review,
+                    difficulty = input.targetRetention,
+                    stability = scheduledDays.toDouble(),
+                    retrievability = input.targetRetention,
+                    scheduledDays = scheduledDays,
+                    dueAt = input.reviewedAt.plusSeconds(SECONDS_PER_DAY),
+                    lastReviewAt = input.reviewedAt,
+                    reviewCount = input.card.reviewCount + 1,
+                    lapseCount = input.card.lapseCount + if (input.rating == ReviewRating.Again) 1 else 0,
+                    firstReviewedAt = input.card.firstReviewedAt ?: input.reviewedAt,
+                    updatedAt = input.reviewedAt,
+                )
+            return ScheduleResult(
+                nextCard = nextCard,
+                logPatch =
+                    ReviewLogPatch(
+                        scheduledDaysBefore = input.card.scheduledDays,
+                        scheduledDaysAfter = scheduledDays,
+                        difficultyBefore = input.card.difficulty,
+                        difficultyAfter = nextCard.difficulty,
+                        stabilityBefore = input.card.stability,
+                        stabilityAfter = nextCard.stability,
+                        retrievabilityBefore = input.card.retrievability,
+                        retrievabilityAfter = nextCard.retrievability,
+                    ),
+                algorithmVersion = "test",
+            )
+        }
+
+        companion object {
+            val enableFuzzingValues = mutableListOf<Boolean>()
         }
     }
 

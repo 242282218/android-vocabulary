@@ -33,7 +33,7 @@ class TodayViewModel
         getTodayOverviewUseCase: GetTodayOverviewUseCase,
         getReviewLoadUseCase: GetReviewLoadUseCase,
     ) : ViewModel() {
-        private val isImporting = MutableStateFlow(true)
+        private val isImporting = MutableStateFlow(false)
         private val importError = MutableStateFlow<String?>(null)
 
         val uiState =
@@ -53,21 +53,23 @@ class TodayViewModel
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TodayUiState())
 
         init {
-            viewModelScope.launch {
-                importVocabulary()
-            }
+            startImport()
         }
 
         fun retryImport() {
+            startImport()
+        }
+
+        private fun startImport() {
             if (isImporting.value) return
+            isImporting.value = true
+            importError.value = null
             viewModelScope.launch {
                 importVocabulary()
             }
         }
 
         private suspend fun importVocabulary() {
-            isImporting.value = true
-            importError.value = null
             try {
                 importVocabularyUseCase()
             } catch (e: CancellationException) {

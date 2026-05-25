@@ -1,6 +1,7 @@
 package com.zzz.androidvocab.core.scheduler
 
 import com.zzz.androidvocab.core.common.daysUntil
+import com.zzz.androidvocab.core.model.MASTERED_SCHEDULED_DAYS
 import com.zzz.androidvocab.core.model.ReviewCard
 import com.zzz.androidvocab.core.model.ReviewRating
 import com.zzz.androidvocab.core.model.ReviewState
@@ -9,6 +10,8 @@ import io.github.openspacedrepetition.Rating
 import io.github.openspacedrepetition.Scheduler
 import io.github.openspacedrepetition.State
 import java.nio.charset.StandardCharsets
+import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.CRC32
 import javax.inject.Inject
 
@@ -17,9 +20,11 @@ class FsrsKotlinReviewScheduler
     constructor() : ReviewScheduler {
         override val algorithm: SchedulerAlgorithm = SchedulerAlgorithm.Fsrs
 
+        private val schedulerCache = ConcurrentHashMap<SchedulerKey, Scheduler>()
+
         override fun schedule(input: ScheduleInput): ScheduleResult {
-            val scheduler = scheduler(input.targetRetention)
-            val previous = input.card.toFsrsCard()
+            val scheduler = scheduler(input.targetRetention, input.enableFuzzing)
+            val previous = input.card.toFsrsCard(input.reviewedAt)
             val beforeRetrievability =
                 input.card.lastReviewAt?.let {
                     scheduler.getCardRetrievability(previous, input.reviewedAt)
@@ -67,24 +72,37 @@ class FsrsKotlinReviewScheduler
         override fun retrievability(
             card: ReviewCard,
             now: java.time.Instant,
+            targetRetention: Double,
         ): Double? {
             if (card.lastReviewAt == null || card.stability == null || card.difficulty == null) {
                 return card.retrievability
             }
-            return scheduler(targetRetention = 0.9).getCardRetrievability(
-                card.toFsrsCard(),
+            return scheduler(targetRetention = targetRetention).getCardRetrievability(
+                card.toFsrsCard(now),
                 now,
             )
         }
 
-        private fun scheduler(targetRetention: Double): Scheduler =
-            Scheduler
-                .builder()
-                .desiredRetention(targetRetention.coerceIn(0.7, 0.98))
-                .enableFuzzing(false)
-                .build()
+        private fun scheduler(
+            targetRetention: Double,
+            enableFuzzing: Boolean = true,
+        ): Scheduler {
+            val key = SchedulerKey(targetRetention.coerceIn(0.7, 0.98), enableFuzzing)
+            return schedulerCache.computeIfAbsent(key) {
+                Scheduler
+                    .builder()
+                    .desiredRetention(it.targetRetention)
+                    .enableFuzzing(it.enableFuzzing)
+                    .build()
+            }
+        }
 
-        private fun ReviewCard.toFsrsCard(): Card {
+        private data class SchedulerKey(
+            val targetRetention: Double,
+            val enableFuzzing: Boolean,
+        )
+
+        private fun ReviewCard.toFsrsCard(now: Instant): Card {
             val state =
                 when (state) {
                     ReviewState.New,
@@ -101,7 +119,7 @@ class FsrsKotlinReviewScheduler
                 .state(state)
                 .stability(stability)
                 .difficulty(difficulty)
-                .due(dueAt ?: updatedAt)
+                .due(dueAt ?: now)
                 .lastReview(lastReviewAt)
                 .build()
         }
@@ -125,7 +143,7 @@ class FsrsKotlinReviewScheduler
                 State.LEARNING -> ReviewState.Learning
                 State.RELEARNING -> ReviewState.Relearning
                 State.REVIEW -> {
-                    if (scheduledDays >= 21) ReviewState.Mastered else ReviewState.Review
+                    if (scheduledDays >= MASTERED_SCHEDULED_DAYS) ReviewState.Mastered else ReviewState.Review
                 }
             }
     }

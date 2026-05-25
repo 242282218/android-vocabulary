@@ -1,20 +1,157 @@
 $ErrorActionPreference = 'Stop'
 
 function Get-AndroidVocabularyRepoRoot {
-    return (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+    return (Resolve-Path (Join-Path (Join-Path $PSScriptRoot '..') '..')).Path
+}
+
+function Join-AndroidVocabularyPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BasePath,
+        [Parameter(Mandatory = $true)]
+        [string[]]$ChildPath
+    )
+
+    $path = $BasePath
+    foreach ($child in $ChildPath) {
+        $path = Join-Path $path $child
+    }
+    return $path
+}
+
+function Get-GradlePropertyValue {
+    param([string]$Name)
+
+    $repoRoot = Get-AndroidVocabularyRepoRoot
+    $propertiesPath = Join-Path $repoRoot 'gradle.properties'
+    $escapedName = [regex]::Escape($Name)
+    $line =
+        Get-Content -LiteralPath $propertiesPath |
+        Where-Object { $_ -match "^\s*$escapedName\s*=" } |
+        Select-Object -First 1
+    if ($null -eq $line) {
+        throw "Gradle property not found: $Name"
+    }
+    return $line.Substring($line.IndexOf('=') + 1).Trim()
+}
+
+function Get-AndroidVocabularyReleaseApkName {
+    $versionName = Get-GradlePropertyValue 'androidVocab.versionName'
+    $versionCode = Get-GradlePropertyValue 'androidVocab.versionCode'
+    return "AndroidVocabulary-release-v$versionName-$versionCode.apk"
+}
+
+function Get-AndroidVocabularyBuildValidationApkName {
+    $versionName = Get-GradlePropertyValue 'androidVocab.versionName'
+    $versionCode = Get-GradlePropertyValue 'androidVocab.versionCode'
+    return "AndroidVocabulary-build-validation-v$versionName-$versionCode.apk"
+}
+
+function Get-AndroidVocabularyReleaseBundleName {
+    $versionName = Get-GradlePropertyValue 'androidVocab.versionName'
+    $versionCode = Get-GradlePropertyValue 'androidVocab.versionCode'
+    return "AndroidVocabulary-release-v$versionName-$versionCode.aab"
+}
+
+function Get-AndroidVocabularyBuildValidationBundleName {
+    $versionName = Get-GradlePropertyValue 'androidVocab.versionName'
+    $versionCode = Get-GradlePropertyValue 'androidVocab.versionCode'
+    return "AndroidVocabulary-build-validation-v$versionName-$versionCode.aab"
+}
+
+function Get-AndroidVocabularyRequiredGitHubActionsChecks {
+    return @(
+        'verify-release-scripts',
+        'verify-vocab-assets',
+        'ktlintCheck',
+        'detekt',
+        'testDebugUnitTest',
+        'assembleDebug',
+        'assembleDebugAndroidTest',
+        'pixel2Api30DebugAndroidTest'
+    )
+}
+
+function Get-AndroidVocabularyTextTail {
+    param(
+        [string]$Text,
+        [int]$MaxLength = 4000
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return '<no output>'
+    }
+    if ($Text.Length -le $MaxLength) {
+        return $Text
+    }
+    return "...[truncated]`n$($Text.Substring($Text.Length - $MaxLength))"
+}
+
+function ConvertTo-AndroidVocabularyOutputText {
+    param(
+        [Parameter(ValueFromPipeline = $true)]
+        [AllowNull()]
+        [object]$InputObject
+    )
+
+    process {
+        if ($null -eq $InputObject) {
+            return ''
+        }
+        if ($InputObject -is [System.Management.Automation.ErrorRecord]) {
+            $message = $InputObject.Exception.Message
+            if (-not [string]::IsNullOrWhiteSpace($message)) {
+                return $message
+            }
+            $targetText = "$($InputObject.TargetObject)"
+            if (-not [string]::IsNullOrWhiteSpace($targetText)) {
+                return $targetText
+            }
+            return ''
+        }
+        return $InputObject.ToString()
+    }
+}
+
+function Invoke-AndroidVocabularyGradle {
+    param(
+        [string]$Name,
+        [string[]]$Tasks,
+        [int]$MaxTailLength = 4000
+    )
+
+    $gradleWrapper = Get-GradleWrapper
+    $arguments = @('--no-daemon', '--console=plain') + $Tasks
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $commandOutput = @()
+    try {
+        & $gradleWrapper @arguments 2>&1 |
+            ConvertTo-AndroidVocabularyOutputText |
+            Tee-Object -Variable commandOutput
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($exitCode -ne 0) {
+        $outputText = @($commandOutput | ConvertTo-AndroidVocabularyOutputText) -join "`n"
+        throw "$Name failed with exit code $exitCode.`nLast output:`n$(Get-AndroidVocabularyTextTail -Text $outputText -MaxLength $MaxTailLength)"
+    }
 }
 
 function Test-JavaHome {
     param([string]$Path)
 
-    return -not [string]::IsNullOrWhiteSpace($Path) -and (Test-Path (Join-Path $Path 'bin\java.exe'))
+    return -not [string]::IsNullOrWhiteSpace($Path) -and
+        -not [string]::IsNullOrWhiteSpace((Get-JavaToolPath -JavaHome $Path -ToolNames @('java.exe', 'java')))
 }
 
 function Use-JavaHome {
     param([string]$Path)
 
     $env:JAVA_HOME = $Path
-    $env:Path = "$(Join-Path $Path 'bin');$env:Path"
+    $env:Path = "$(Join-Path $Path 'bin')$([IO.Path]::PathSeparator)$env:Path"
     Write-Host "[info] JAVA_HOME=$env:JAVA_HOME"
 }
 
@@ -26,7 +163,7 @@ function Use-AndroidVocabularyJavaHome {
     }
 
     $candidates = @(
-        (Join-Path $repoRoot '.tools\jdk-17'),
+        (Join-AndroidVocabularyPath $repoRoot @('.tools', 'jdk-17')),
         'D:\AndroidVocabularyTools\jdk-17',
         'C:\Program Files\Android\Android Studio\jbr',
         'C:\Program Files\Java\jdk-17',
@@ -48,7 +185,7 @@ function Get-AndroidSdkDir {
     if (-not [string]::IsNullOrWhiteSpace($env:ANDROID_SDK_ROOT)) {
         $candidates += $env:ANDROID_SDK_ROOT
     }
-    $candidates += Join-Path $repoRoot '.tools\android-sdk'
+    $candidates += Join-AndroidVocabularyPath $repoRoot @('.tools', 'android-sdk')
 
     $localPropertiesPath = Join-Path $repoRoot 'local.properties'
     if (Test-Path $localPropertiesPath) {
@@ -104,10 +241,59 @@ function Get-AndroidTool {
     throw "Android tool not found: $($Names -join ', ')"
 }
 
+function Get-GradleWrapper {
+    $repoRoot = Get-AndroidVocabularyRepoRoot
+    $candidates =
+        if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+            @(
+                (Join-Path $repoRoot 'gradlew.bat'),
+                (Join-Path $repoRoot 'gradlew')
+            )
+        } else {
+            @(
+                (Join-Path $repoRoot 'gradlew'),
+                (Join-Path $repoRoot 'gradlew.bat')
+            )
+        }
+    $gradleWrapper = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($gradleWrapper)) {
+        throw "Gradle wrapper not found under repo root: $repoRoot"
+    }
+    return $gradleWrapper
+}
+
+function Get-JavaToolPath {
+    param(
+        [string]$JavaHome,
+        [string[]]$ToolNames
+    )
+
+    if ([string]::IsNullOrWhiteSpace($JavaHome)) {
+        return $null
+    }
+
+    $binDir = Join-Path $JavaHome 'bin'
+    foreach ($toolName in $ToolNames) {
+        $candidate = Join-Path $binDir $toolName
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Get-JavaExecutable {
+    $java = Get-JavaToolPath -JavaHome $env:JAVA_HOME -ToolNames @('java.exe', 'java')
+    if ([string]::IsNullOrWhiteSpace($java)) {
+        throw "java executable not found under JAVA_HOME: $env:JAVA_HOME"
+    }
+    return $java
+}
+
 function Get-JarSigner {
-    $jarSigner = Join-Path $env:JAVA_HOME 'bin\jarsigner.exe'
-    if (-not (Test-Path $jarSigner)) {
-        throw "jarsigner.exe not found under JAVA_HOME: $env:JAVA_HOME"
+    $jarSigner = Get-JavaToolPath -JavaHome $env:JAVA_HOME -ToolNames @('jarsigner.exe', 'jarsigner')
+    if ([string]::IsNullOrWhiteSpace($jarSigner)) {
+        throw "jarsigner executable not found under JAVA_HOME: $env:JAVA_HOME"
     }
     return $jarSigner
 }
@@ -123,8 +309,9 @@ function Get-BundleToolJar {
     if (-not [string]::IsNullOrWhiteSpace($env:BUNDLETOOL_JAR)) {
         $candidates += $env:BUNDLETOOL_JAR
     }
-    $candidates += Join-Path $repoRoot '.tools\bundletool\bundletool.jar'
-    $candidates += Get-ChildItem -Path (Join-Path $repoRoot '.tools\bundletool') -Filter 'bundletool*.jar' -File -ErrorAction SilentlyContinue |
+    $bundleToolDir = Join-AndroidVocabularyPath $repoRoot @('.tools', 'bundletool')
+    $candidates += Join-Path $bundleToolDir 'bundletool.jar'
+    $candidates += Get-ChildItem -Path $bundleToolDir -Filter 'bundletool*.jar' -File -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending |
         ForEach-Object { $_.FullName }
 

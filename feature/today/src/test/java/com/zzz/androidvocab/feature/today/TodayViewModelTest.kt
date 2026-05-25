@@ -18,6 +18,8 @@ import com.zzz.androidvocab.core.model.DifficultWord
 import com.zzz.androidvocab.core.model.ImportResult
 import com.zzz.androidvocab.core.model.RetentionStats
 import com.zzz.androidvocab.core.model.ReviewCard
+import com.zzz.androidvocab.core.model.ReviewDataIntegrityReport
+import com.zzz.androidvocab.core.model.ReviewDataRepairResult
 import com.zzz.androidvocab.core.model.ReviewQueueItem
 import com.zzz.androidvocab.core.model.ReviewResult
 import com.zzz.androidvocab.core.model.SourceInfo
@@ -62,8 +64,9 @@ class TodayViewModelTest {
     fun initialImportKeepsTodayScreenInImportingStateUntilFinished() =
         runTest {
             Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-            val importCompletion = CompletableDeferred<Unit>()
-            val viewModel = viewModel(importCompletion)
+            val importAttempt = ImportAttempt()
+            val vocabularyRepository = FakeVocabularyRepository(importAttempt)
+            val viewModel = viewModel(vocabularyRepository)
 
             val importing =
                 async(UnconfinedTestDispatcher(testScheduler)) {
@@ -73,7 +76,7 @@ class TodayViewModelTest {
 
             assertEquals(true, importing.await().isImporting)
 
-            importCompletion.complete(Unit)
+            importAttempt.complete()
             val ready =
                 async(UnconfinedTestDispatcher(testScheduler)) {
                     viewModel.uiState.first { !it.isLoading && !it.isImporting }
@@ -83,8 +86,44 @@ class TodayViewModelTest {
             assertNull(ready.await().errorMessage)
         }
 
-    private fun viewModel(importCompletion: CompletableDeferred<Unit>): TodayViewModel {
-        val vocabularyRepository = FakeVocabularyRepository(importCompletion)
+    @Test
+    fun retryImportIgnoresDuplicateTriggerWhileRunning() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+            val failedInitialImport = ImportAttempt(failure = IllegalStateException("broken assets"))
+            val retryImport = ImportAttempt()
+            val vocabularyRepository = FakeVocabularyRepository(failedInitialImport, retryImport)
+            val viewModel = viewModel(vocabularyRepository)
+
+            val failed =
+                async(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.first { !it.isLoading && !it.isImporting && it.errorMessage != null }
+                }
+            runCurrent()
+            failedInitialImport.complete()
+            runCurrent()
+
+            assertEquals(true, failed.await().errorMessage != null)
+            assertEquals(1, vocabularyRepository.callCount)
+
+            viewModel.retryImport()
+            viewModel.retryImport()
+            runCurrent()
+
+            assertEquals(true, viewModel.uiState.value.isImporting)
+            assertEquals(2, vocabularyRepository.callCount)
+
+            retryImport.complete()
+            val ready =
+                async(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.first { !it.isLoading && !it.isImporting }
+                }
+            runCurrent()
+
+            assertNull(ready.await().errorMessage)
+        }
+
+    private fun viewModel(vocabularyRepository: VocabularyRepository): TodayViewModel {
         val settingsRepository = FakeSettingsRepository()
         val reviewRepository = FakeReviewRepository()
         val statsRepository = FakeStatsRepository()
@@ -108,8 +147,12 @@ class TodayViewModelTest {
 }
 
 private class FakeVocabularyRepository(
-    private val importCompletion: CompletableDeferred<Unit>,
+    vararg attempts: ImportAttempt,
 ) : VocabularyRepository {
+    private val attempts = ArrayDeque(attempts.toList())
+    var callCount: Int = 0
+        private set
+
     override fun observeBookProgress(now: Instant): Flow<List<BookProgress>> = flowOf(emptyList())
 
     override fun searchWords(
@@ -124,13 +167,30 @@ private class FakeVocabularyRepository(
     override fun observeSourceInfo(): Flow<List<SourceInfo>> = flowOf(emptyList())
 
     override suspend fun importPublishSafeVocabulary(): ImportResult {
-        importCompletion.await()
+        callCount += 1
+        val attempt = if (attempts.isEmpty()) error("Unexpected import attempt") else attempts.removeFirst()
+        attempt.await()
         return ImportResult(
             importedWords = 0,
             memberships = 0,
             bookCounts = emptyMap(),
             generatedAt = "2026-05-16",
         )
+    }
+}
+
+private class ImportAttempt(
+    private val failure: Exception? = null,
+) {
+    private val completion = CompletableDeferred<Unit>()
+
+    fun complete() {
+        completion.complete(Unit)
+    }
+
+    suspend fun await() {
+        completion.await()
+        failure?.let { throw it }
     }
 }
 
@@ -146,6 +206,21 @@ private class FakeReviewRepository : ReviewRepository {
     override suspend fun replayLogs(cardId: String): ReviewCard = unused()
 
     override suspend fun getQueueItem(cardId: String): ReviewQueueItem = unused()
+
+    override suspend fun inspectReviewDataIntegrity(): ReviewDataIntegrityReport =
+        ReviewDataIntegrityReport(
+            cardsWithLogs = 0,
+            missingCacheCount = 0,
+            inconsistentCacheCount = 0,
+            legacyLogCardCount = 0,
+        )
+
+    override suspend fun repairReviewDataCache(): ReviewDataRepairResult =
+        ReviewDataRepairResult(
+            before = inspectReviewDataIntegrity(),
+            after = inspectReviewDataIntegrity(),
+            repairedCount = 0,
+        )
 }
 
 private class FakeStatsRepository : StatsRepository {

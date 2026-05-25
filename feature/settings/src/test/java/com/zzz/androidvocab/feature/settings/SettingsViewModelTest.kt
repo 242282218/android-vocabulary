@@ -26,9 +26,11 @@ import com.zzz.androidvocab.core.model.TodayQueue
 import com.zzz.androidvocab.core.model.WordDetail
 import com.zzz.androidvocab.core.model.WordEntry
 import com.zzz.androidvocab.core.model.WordStatusFilter
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -49,6 +51,62 @@ class SettingsViewModelTest {
     fun tearDown() {
         kotlinx.coroutines.Dispatchers.resetMain()
     }
+
+    @Test
+    fun exportDataTracksProgressAndResult() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val gate = CompletableDeferred<Unit>()
+            val exportRepository = RecordingExportRepository(gate = gate)
+            val viewModel = viewModel(exportRepository = exportRepository)
+            val collector =
+                launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.collect()
+                }
+
+            viewModel.exportData()
+            advanceUntilIdle()
+
+            assertEquals(true, viewModel.uiState.value.isExporting)
+            assertEquals(1, exportRepository.callCount)
+
+            gate.complete(Unit)
+            advanceUntilIdle()
+
+            assertEquals(false, viewModel.uiState.value.isExporting)
+            assertEquals(
+                "export.json",
+                viewModel.uiState.value.exportResult
+                    ?.fileName,
+            )
+            collector.cancel()
+        }
+
+    @Test
+    fun exportDataIgnoresDuplicateTriggerWhileRunning() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val gate = CompletableDeferred<Unit>()
+            val exportRepository = RecordingExportRepository(gate = gate)
+            val viewModel = viewModel(exportRepository = exportRepository)
+            val collector =
+                launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.collect()
+                }
+
+            viewModel.exportData()
+            viewModel.exportData()
+            advanceUntilIdle()
+
+            assertEquals(true, viewModel.uiState.value.isExporting)
+            assertEquals(1, exportRepository.callCount)
+
+            gate.complete(Unit)
+            advanceUntilIdle()
+            collector.cancel()
+        }
 
     @Test
     fun inspectLearningDataUpdatesMaintenanceState() =
@@ -75,8 +133,12 @@ class SettingsViewModelTest {
 
             val maintenance = viewModel.uiState.value.dataMaintenance
             assertEquals(3, maintenance.report?.cardsWithLogs)
-            assertEquals(2, maintenance.report?.issueCount)
-            assertEquals("已检查 3 张：缺失缓存 1，不一致 1，旧日志 1。", maintenance.message)
+            assertEquals(3, maintenance.report?.issueCount)
+            assertEquals(2, maintenance.report?.repairableIssueCount)
+            assertEquals(
+                "已检查 3 张：可修复 2 项，需人工确认 1 项。缺失缓存 1，不一致 1，旧日志 1，孤儿日志 0。",
+                maintenance.message,
+            )
         }
 
     @Test
@@ -115,16 +177,19 @@ class SettingsViewModelTest {
 
             val maintenance = viewModel.uiState.value.dataMaintenance
             assertEquals(0, maintenance.report?.issueCount)
-            assertEquals("已修复 2 项，剩余 0 项。", maintenance.message)
+            assertEquals("已修复 2 项，剩余可修复 0 项，需人工确认 0 项。", maintenance.message)
         }
 
-    private fun viewModel(reviewRepository: MaintenanceReviewRepository): SettingsViewModel {
+    private fun viewModel(
+        reviewRepository: MaintenanceReviewRepository = MaintenanceReviewRepository(),
+        exportRepository: ExportRepository = FakeExportRepository(),
+    ): SettingsViewModel {
         val settingsRepository = FakeSettingsRepository()
         return SettingsViewModel(
             observeSettingsUseCase = ObserveSettingsUseCase(settingsRepository),
             vocabularyRepository = FakeVocabularyRepository(),
             updateSettingsUseCase = UpdateSettingsUseCase(settingsRepository),
-            exportUserDataUseCase = ExportUserDataUseCase(FakeExportRepository()),
+            exportUserDataUseCase = ExportUserDataUseCase(exportRepository),
             inspectReviewDataIntegrityUseCase = InspectReviewDataIntegrityUseCase(reviewRepository),
             repairReviewDataCacheUseCase = RepairReviewDataCacheUseCase(reviewRepository),
         )
@@ -203,6 +268,24 @@ private class FakeVocabularyRepository : VocabularyRepository {
 
 private class FakeExportRepository : ExportRepository {
     override suspend fun exportUserData(): ExportResult = unsupported()
+}
+
+private class RecordingExportRepository(
+    private val gate: CompletableDeferred<Unit>,
+    private val result: ExportResult =
+        ExportResult(
+            fileName = "export.json",
+            absolutePath = "D:\\exports\\export.json",
+        ),
+) : ExportRepository {
+    var callCount: Int = 0
+        private set
+
+    override suspend fun exportUserData(): ExportResult {
+        callCount += 1
+        gate.await()
+        return result
+    }
 }
 
 private fun unsupported(): Nothing = error("unused")

@@ -3,6 +3,7 @@ package com.zzz.androidvocab.core.designsystem
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -102,13 +103,14 @@ fun WarmHeroCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val isDark = isSystemInDarkTheme()
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = VocabHeroShape,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
+        border = BorderStroke(1.dp, if (isDark) VocabColors.HeroBorderDark else VocabColors.HeroBorder),
         colors =
             CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f),
+                containerColor = if (isDark) VocabColors.HeroBackgroundDark else VocabColors.HeroBackground,
                 contentColor = MaterialTheme.colorScheme.onSurface,
             ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),

@@ -80,6 +80,30 @@ class ImportFreshnessTest {
     }
 
     @Test
+    fun assetFingerprintMismatchIsNotFresh() {
+        assertFalse(
+            isCurrentPublishSafeImport(
+                manifest = publishManifest(assetFingerprint = "fingerprint-b"),
+                latestImportRun = latestImportRun(assetFingerprint = "fingerprint-a"),
+                hasSourceManifest = true,
+                bookCounts = expectedCounts(),
+            ),
+        )
+    }
+
+    @Test
+    fun missingAssetFingerprintIsNotFresh() {
+        assertFalse(
+            isCurrentPublishSafeImport(
+                manifest = publishManifest(assetFingerprint = ""),
+                latestImportRun = latestImportRun(assetFingerprint = ""),
+                hasSourceManifest = true,
+                bookCounts = expectedCounts(),
+            ),
+        )
+    }
+
+    @Test
     fun countMismatchIsNotFresh() {
         assertFalse(
             isCurrentPublishSafeImport(
@@ -107,25 +131,35 @@ class ImportFreshnessTest {
 private fun publishManifest(
     buildTarget: String = "publish",
     generatedAt: String = "2026-05-16",
+    assetFingerprint: String = "fingerprint-a",
 ): VocabManifest =
     VocabManifest(
         buildTarget = buildTarget,
         generatedAt = generatedAt,
+        sourcesHash = "sources-hash",
+        assetFingerprint = assetFingerprint,
         books =
             BookCode.entries.associate { book ->
-                book.name to VocabManifestBook(file = book.assetFileName, count = book.expectedPublishSafeCount)
+                book.name to
+                    VocabManifestBook(
+                        file = book.assetFileName,
+                        count = book.expectedPublishSafeCount,
+                        hash = "${book.name.lowercase()}-hash",
+                    )
             },
     )
 
 private fun latestImportRun(
     buildTarget: String = "publish",
     generatedAt: String = "2026-05-16",
+    assetFingerprint: String = "fingerprint-a",
 ): VocabularyImportRunEntity =
     VocabularyImportRunEntity(
         id = "import-test",
         buildTarget = buildTarget,
         generatedAt = generatedAt,
         bookCountsJson = "{}",
+        assetFingerprint = assetFingerprint,
         importedWords = 1,
         memberships = expectedCounts().values.sum(),
         importedAt = Instant.parse("2026-05-16T00:00:00Z"),

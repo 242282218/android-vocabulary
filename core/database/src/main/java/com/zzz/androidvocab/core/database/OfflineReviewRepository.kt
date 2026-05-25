@@ -23,11 +23,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onStart
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
 class OfflineReviewRepository
@@ -39,6 +39,8 @@ class OfflineReviewRepository
         private val scheduler: ReviewScheduler,
         private val clockProvider: ClockProvider,
     ) : ReviewRepository {
+        private val cardsRepairDone = AtomicBoolean(false)
+
         @OptIn(ExperimentalCoroutinesApi::class)
         override fun observeTodayQueue(
             now: Instant,
@@ -57,19 +59,12 @@ class OfflineReviewRepository
                     val remaining = (dailyNewLimit - learnedToday).coerceAtLeast(0)
                     if (remaining == 0) flowOf(emptyList()) else reviewDao.observeNewQueue(bookCodes, remaining)
                 }
-            return flow {
-                database.withTransaction {
-                    repairMissingCardsFromLogs(now)
-                }
-                emitAll(
-                    combine(dueFlow, newFlow) { dueRows, newRows ->
-                        TodayQueue(
-                            dueItems = dueRows.map { it.toQueueItem(now) },
-                            newItems = newRows.map { it.toQueueItem(now) },
-                        )
-                    },
+            return combine(dueFlow, newFlow) { dueRows, newRows ->
+                TodayQueue(
+                    dueItems = dueRows.map { it.toQueueItem(now) },
+                    newItems = newRows.map { it.toQueueItem(now) },
                 )
-            }
+            }.onStart { repairMissingCardsOnce(now) }
         }
 
         override suspend fun submitFeedback(command: SubmitFeedbackCommand): ReviewResult =
@@ -227,9 +222,16 @@ class OfflineReviewRepository
                             zoneId = clockProvider.zoneId(),
                             targetRetention = log.targetRetention,
                             durationMs = log.durationMs,
+                            enableFuzzing = false,
                         ),
                     ).nextCard
                 }
+            }
+        }
+
+        private suspend fun repairMissingCardsOnce(now: Instant) {
+            if (!cardsRepairDone.getAndSet(true)) {
+                repairMissingCardsFromLogs(now)
             }
         }
 
@@ -248,6 +250,7 @@ class OfflineReviewRepository
             var missingCacheCount = 0
             var inconsistentCacheCount = 0
             var legacyLogCardCount = 0
+            var repairableIssueCount = 0
             val cardIds = reviewDao.getCardIdsWithLogs()
             cardIds.forEach { cardId ->
                 val logs = reviewDao.getLogs(cardId).map { it.toModel() }
@@ -258,8 +261,15 @@ class OfflineReviewRepository
                 val current = reviewDao.getCard(cardId)?.toModel()
                 if (current == null) {
                     missingCacheCount += 1
-                } else if (!hasLegacyLogs && current.differsFrom(replayLogsToCard(cardId, logs, now))) {
-                    inconsistentCacheCount += 1
+                    if (!hasLegacyLogs) {
+                        repairableIssueCount += 1
+                    }
+                } else if (!hasLegacyLogs) {
+                    val replayed = replayLogsToCard(cardId, logs, now)
+                    if (current.differsFrom(replayed)) {
+                        inconsistentCacheCount += 1
+                        repairableIssueCount += 1
+                    }
                 }
             }
             return ReviewDataIntegrityReport(
@@ -267,6 +277,8 @@ class OfflineReviewRepository
                 missingCacheCount = missingCacheCount,
                 inconsistentCacheCount = inconsistentCacheCount,
                 legacyLogCardCount = legacyLogCardCount,
+                orphanLogCount = reviewDao.countOrphanLogs(),
+                repairableIssueCount = repairableIssueCount,
             )
         }
 

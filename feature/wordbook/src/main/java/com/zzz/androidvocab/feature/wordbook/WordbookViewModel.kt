@@ -15,6 +15,7 @@ import com.zzz.androidvocab.core.model.WordEntry
 import com.zzz.androidvocab.core.model.WordStatusFilter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
@@ -48,7 +49,7 @@ class WordbookViewModel
         private val statusFilter = MutableStateFlow(WordStatusFilter.All)
         private val selectedWordId = MutableStateFlow<String?>(null)
 
-        @OptIn(ExperimentalCoroutinesApi::class)
+        @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
         val uiState =
             run {
                 val settingsFlow = observeSettingsUseCase()
@@ -87,10 +88,12 @@ class WordbookViewModel
 
         fun updateQuery(value: String) {
             query.value = value
+            selectedWordId.value = null
         }
 
         fun updateStatusFilter(value: WordStatusFilter) {
             statusFilter.value = value
+            selectedWordId.value = null
         }
 
         fun selectWord(wordId: String) {
@@ -103,6 +106,7 @@ class WordbookViewModel
 
         fun toggleBook(bookCode: BookCode) {
             viewModelScope.launch {
+                selectedWordId.value = null
                 updateSettingsUseCase.toggleBook(bookCode)
             }
         }

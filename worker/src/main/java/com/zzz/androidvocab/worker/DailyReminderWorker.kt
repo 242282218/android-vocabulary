@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -29,9 +30,10 @@ class DailyReminderWorker
             manager.createNotificationChannel(
                 NotificationChannel(channelId, "Daily review", NotificationManager.IMPORTANCE_DEFAULT),
             )
-            if (ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
+            val permissionGranted =
+                ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) ==
+                    PackageManager.PERMISSION_GRANTED
+            if (!canPostNotifications(Build.VERSION.SDK_INT, permissionGranted)) {
                 return Result.success()
             }
             val launchIntent =
@@ -64,3 +66,10 @@ class DailyReminderWorker
             const val NOTIFICATION_ID = 1001
         }
     }
+
+internal fun canPostNotifications(
+    sdkInt: Int,
+    permissionGranted: Boolean,
+): Boolean = sdkInt < POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK || permissionGranted
+
+private const val POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK = 33

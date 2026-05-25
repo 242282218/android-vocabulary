@@ -37,6 +37,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.compose.NavHost
@@ -65,12 +67,13 @@ class MainActivity : ComponentActivity() {
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
             val settings by viewModel.settings.collectAsStateWithLifecycle()
             val context = LocalContext.current
-            var notificationPermissionGranted by remember {
-                mutableStateOf(hasPostNotificationsPermission(context))
+            var hasNotificationPermission by remember { mutableStateOf(hasPostNotificationsPermission(context)) }
+            LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                hasNotificationPermission = hasPostNotificationsPermission(context)
             }
             val notificationPermissionLauncher =
                 rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-                    notificationPermissionGranted = isGranted
+                    hasNotificationPermission = isGranted
                     if (!isGranted) {
                         viewModel.disableReminder()
                     }
@@ -79,19 +82,16 @@ class MainActivity : ComponentActivity() {
                 settings.reminderEnabled,
                 settings.reminderHour,
                 settings.reminderMinute,
-                notificationPermissionGranted,
+                hasNotificationPermission,
             ) {
-                when (reminderSyncAction(settings.reminderEnabled, hasPostNotificationsPermission(context))) {
-                    ReminderSyncAction.Schedule -> {
-                        notificationPermissionGranted = true
+                when (reminderSyncAction(settings.reminderEnabled, hasNotificationPermission)) {
+                    ReminderSyncAction.Schedule ->
                         reminderScheduler.scheduleDailyReminder(settings.reminderHour, settings.reminderMinute)
-                    }
+                    ReminderSyncAction.Cancel -> reminderScheduler.cancelDailyReminder()
                     ReminderSyncAction.RequestPermission -> {
-                        notificationPermissionGranted = false
                         reminderScheduler.cancelDailyReminder()
                         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }
-                    ReminderSyncAction.Cancel -> reminderScheduler.cancelDailyReminder()
                 }
             }
             VocabTheme(themeMode = themeMode) {

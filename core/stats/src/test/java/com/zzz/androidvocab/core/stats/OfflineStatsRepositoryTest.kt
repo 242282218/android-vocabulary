@@ -11,6 +11,8 @@ import com.zzz.androidvocab.core.database.DueCardRow
 import com.zzz.androidvocab.core.database.ReviewCardEntity
 import com.zzz.androidvocab.core.database.StatsDao
 import com.zzz.androidvocab.core.database.WordEntryEntity
+import com.zzz.androidvocab.core.domain.SettingsRepository
+import com.zzz.androidvocab.core.model.AppSettings
 import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.ReviewCard
 import com.zzz.androidvocab.core.model.ReviewState
@@ -30,6 +32,7 @@ import java.time.ZoneId
 
 class OfflineStatsRepositoryTest {
     private val now = Instant.parse("2026-05-16T08:00:00Z")
+    private val defaultSettings = AppSettings()
 
     @Test
     fun retentionStatsUseCurrentSchedulerRetrievability() =
@@ -39,6 +42,7 @@ class OfflineStatsRepositoryTest {
                     statsDao = FakeStatsDao(reviewedCards = listOf(reviewCard(retrievability = 0.99))),
                     clockProvider = FixedClock(now),
                     scheduler = FakeScheduler(currentRetrievability = mapOf("card-1" to 0.42)),
+                    settingsRepository = FakeSettingsRepository(defaultSettings),
                 )
 
             val stats = repository.observeRetentionStats(days = 30, now = now).first()
@@ -63,6 +67,7 @@ class OfflineStatsRepositoryTest {
                         ),
                     clockProvider = FixedClock(now),
                     scheduler = FakeScheduler(),
+                    settingsRepository = FakeSettingsRepository(defaultSettings),
                 )
 
             val load = repository.observeReviewLoad(days = 3, now = now).first()
@@ -74,24 +79,16 @@ class OfflineStatsRepositoryTest {
     @Test
     fun bookStatsDelegateToStatsDao() =
         runTest {
-            val bookStatsRow =
-                BookStatsRow(
-                    bookCode = BookCode.CET4.name,
-                    totalCount = 2,
-                    learnedCount = 1,
-                    masteredCount = 0,
-                    dueCount = 0,
-                    learningCount = 0,
-                    familiarCount = 1,
-                )
             val repository =
                 OfflineStatsRepository(
                     statsDao =
                         FakeStatsDao(
-                            bookStatsRows = listOf(bookStatsRow),
+                            bookTotals = listOf(BookCountRow(BookCode.CET4.name, 2)),
+                            validReviewCards = listOf(reviewCard(retrievability = 0.90)),
                         ),
                     clockProvider = FixedClock(now),
-                    scheduler = FakeScheduler(),
+                    scheduler = FakeScheduler(currentRetrievability = mapOf("card-1" to 0.40)),
+                    settingsRepository = FakeSettingsRepository(defaultSettings),
                 )
 
             val stats = repository.observeBookStats(now).first().single()
@@ -104,8 +101,9 @@ class OfflineStatsRepositoryTest {
         }
 
     @Test
-    fun todayStatsLeaveRemainingEstimateToTodayOverviewUseCase() =
+    fun todayStatsComputesRemainingAndEstimate() =
         runTest {
+            val settings = defaultSettings.copy(dailyNewLimit = 10)
             val repository =
                 OfflineStatsRepository(
                     statsDao =
@@ -114,14 +112,16 @@ class OfflineStatsRepositoryTest {
                             dailyCompleted = 2,
                             dailyNewCount = 1,
                             dailyDurationMs = 61_000L,
+                            dueCount = 5,
                         ),
                     clockProvider = FixedClock(now),
                     scheduler = FakeScheduler(),
+                    settingsRepository = FakeSettingsRepository(settings),
                 )
 
             val stats = repository.observeTodayStats(LocalDate.parse("2026-05-16"), now).first()
 
-            assertEquals(0, stats.estimatedMinutes)
+            assertEquals(5 + 9, stats.remainingCount)
             assertEquals(1, stats.reviewCount)
             assertEquals(1.0, stats.recallAccuracy, 0.0)
         }
@@ -134,6 +134,7 @@ class OfflineStatsRepositoryTest {
                     statsDao = FakeStatsDao(averageDurationMs = 3_500.4),
                     clockProvider = FixedClock(now),
                     scheduler = FakeScheduler(),
+                    settingsRepository = FakeSettingsRepository(defaultSettings),
                 )
 
             val average =
@@ -174,9 +175,10 @@ private class FakeStatsDao(
     private val dailyDurationMs: Long = 0L,
     private val averageDurationMs: Double? = null,
     private val dueCards: List<DueCardRow> = emptyList(),
+    private val dueCount: Int = 0,
     private val bookTotals: List<BookCountRow> = emptyList(),
-    private val bookStatsRows: List<BookStatsRow> = emptyList(),
     private val reviewedCards: List<ReviewCardEntity> = emptyList(),
+    private val validReviewCards: List<ReviewCardEntity> = emptyList(),
 ) : StatsDao {
     override fun observeDailyRatingCounts(localDay: String): Flow<List<DailyRatingCountRow>> = flowOf(dailyRatings)
 
@@ -210,9 +212,16 @@ private class FakeStatsDao(
     override fun observeDueCards(end: Instant): Flow<List<DueCardRow>> =
         flowOf(dueCards.filter { row -> row.dueAt?.let { dueAt -> dueAt < end } == true })
 
+    override fun observeDueCount(
+        now: Instant,
+        bookCodes: List<String>,
+    ): Flow<Int> = flowOf(dueCount)
+
     override fun observeBookTotals(): Flow<List<BookCountRow>> = flowOf(bookTotals)
 
-    override fun observeBookStats(now: Instant): Flow<List<BookStatsRow>> = flowOf(bookStatsRows)
+    override fun observeValidReviewCards(): Flow<List<ReviewCardEntity>> = flowOf(validReviewCards)
+
+    override fun observeBookStats(now: Instant): Flow<List<BookStatsRow>> = flowOf(emptyList())
 
     override fun observeReviewedCards(from: Instant): Flow<List<ReviewCardEntity>> = flowOf(reviewedCards)
 
@@ -238,7 +247,37 @@ private class FakeScheduler(
     override fun retrievability(
         card: ReviewCard,
         now: Instant,
+        targetRetention: Double,
     ): Double? = currentRetrievability[card.id] ?: card.retrievability
+}
+
+private class FakeSettingsRepository(
+    appSettings: AppSettings,
+) : SettingsRepository {
+    override val settings: Flow<AppSettings> = flowOf(appSettings)
+
+    override suspend fun updateDailyNewLimit(value: Int) = Unit
+
+    override suspend fun updateSelectedBooks(bookCodes: Set<BookCode>) = Unit
+
+    override suspend fun toggleBook(bookCode: BookCode) = Unit
+
+    override suspend fun updateTargetRetention(value: Double) = Unit
+
+    override suspend fun updateReminder(
+        enabled: Boolean,
+        hour: Int,
+        minute: Int,
+    ) = Unit
+
+    override suspend fun updateReminderEnabled(enabled: Boolean) = Unit
+
+    override suspend fun updateReminderTime(
+        hour: Int,
+        minute: Int,
+    ) = Unit
+
+    override suspend fun updateThemeMode(themeMode: com.zzz.androidvocab.core.model.ThemeMode) = Unit
 }
 
 private class FixedClock(

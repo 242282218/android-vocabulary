@@ -5,7 +5,6 @@ import androidx.test.core.app.ApplicationProvider
 import com.zzz.androidvocab.core.common.cardId
 import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.ReviewState
-import com.zzz.androidvocab.core.model.WordStatusFilter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -37,7 +36,7 @@ class WordDaoSearchTest {
     }
 
     @Test
-    fun statusFiltersUseReviewCardState() =
+    fun searchReturnsSelectedCandidatesInBookOrder() =
         runTest {
             val now = Instant.parse("2026-05-16T08:00:00Z")
             seedWords(now)
@@ -52,16 +51,8 @@ class WordDaoSearchTest {
             )
 
             assertEquals(
-                listOf("fresh"),
-                search(WordStatusFilter.Unlearned, now),
-            )
-            assertEquals(
-                listOf("due", "overdue-mastered"),
-                search(WordStatusFilter.Due, now),
-            )
-            assertEquals(
-                listOf("mastered"),
-                search(WordStatusFilter.Mastered, now),
+                listOf("fresh", "due", "mastered", "overdue-mastered"),
+                search(),
             )
         }
 
@@ -81,11 +72,11 @@ class WordDaoSearchTest {
 
             assertEquals(
                 listOf("alpha"),
-                search(WordStatusFilter.All, now, listOf(BookCode.CET4.name)),
+                search(listOf(BookCode.CET4.name)),
             )
             assertEquals(
                 listOf("alpha", "beta"),
-                search(WordStatusFilter.All, now, listOf(BookCode.CET4.name, BookCode.CET6.name)),
+                search(listOf(BookCode.CET4.name, BookCode.CET6.name)),
             )
         }
 
@@ -101,7 +92,7 @@ class WordDaoSearchTest {
             val result =
                 database
                     .wordDao()
-                    .searchWords("抛弃", listOf(BookCode.CET4.name), WordStatusFilter.All.name, now)
+                    .searchWords("抛弃", listOf(BookCode.CET4.name))
                     .first()
                     .map { it.word }
 
@@ -109,7 +100,7 @@ class WordDaoSearchTest {
         }
 
     @Test
-    fun statusFiltersAggregateSharedWordsAcrossSelectedBooks() =
+    fun searchCandidatesIncludeSharedWordsOnceAcrossSelectedBooks() =
         runTest {
             val now = Instant.parse("2026-05-16T08:00:00Z")
             val shared = word("shared-word", "shared", now)
@@ -126,8 +117,7 @@ class WordDaoSearchTest {
 
             val selectedBooks = listOf(BookCode.CET4.name, BookCode.CET6.name)
 
-            assertEquals(emptyList<String>(), search(WordStatusFilter.Unlearned, now, selectedBooks))
-            assertEquals(listOf("shared"), search(WordStatusFilter.Due, now, selectedBooks))
+            assertEquals(listOf("shared"), search(selectedBooks))
         }
 
     @Test
@@ -168,14 +158,10 @@ class WordDaoSearchTest {
         )
     }
 
-    private suspend fun search(
-        filter: WordStatusFilter,
-        now: Instant,
-        bookCodes: List<String> = listOf(BookCode.CET4.name),
-    ): List<String> =
+    private suspend fun search(bookCodes: List<String> = listOf(BookCode.CET4.name)): List<String> =
         database
             .wordDao()
-            .searchWords("", bookCodes, filter.name, now)
+            .searchWords("", bookCodes)
             .first()
             .map { it.word }
 
