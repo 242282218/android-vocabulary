@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly AVD_NAME="${ANDROID_VOCAB_CI_AVD_NAME:-android-vocab-api30}"
+readonly AVD_NAME="${ANDROID_VOCAB_CI_AVD_NAME:-android_vocab_api30}"
 readonly DEVICE_PROFILE="${ANDROID_VOCAB_CI_DEVICE_PROFILE:-pixel_2}"
 readonly SYSTEM_IMAGE="${ANDROID_VOCAB_CI_SYSTEM_IMAGE:-system-images;android-30;aosp_atd;x86}"
 readonly REPORT_DIR="build/reports/ci-emulator"
 readonly EMULATOR_LOG="$REPORT_DIR/emulator.log"
 EMULATOR_PID=""
+export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 
 mkdir -p "$REPORT_DIR"
+mkdir -p "$ANDROID_AVD_HOME"
 
 cleanup() {
   adb emu kill >/dev/null 2>&1 || true
@@ -52,6 +54,7 @@ echo "no" | avdmanager create avd \
   --name "$AVD_NAME" \
   --package "$SYSTEM_IMAGE" \
   --device "$DEVICE_PROFILE"
+avdmanager list avd
 
 "$ANDROID_HOME/emulator/emulator" -accel-check | tee "$REPORT_DIR/accel-check.txt" || true
 "$ANDROID_HOME/emulator/emulator" \
