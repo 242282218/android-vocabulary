@@ -37,6 +37,11 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           sudo chmod 666 /dev/kvm || true
           ls -l /dev/kvm || true
+      - name: Free CI disk space
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          df -h
       - name: Verify
         run: ./gradlew --no-daemon --console=plain ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest
       - name: Run API 30 instrumentation tests
