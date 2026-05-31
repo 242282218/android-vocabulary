@@ -36,7 +36,9 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Verify
-        run: ./gradlew ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest pixel2Api30DebugAndroidTest -Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader_indirect
+        run: ./gradlew --no-daemon --console=plain ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest
+      - name: Run API 30 instrumentation tests
+        run: bash ./scripts/test/run-ci-emulator-tests.sh
       - name: Write release readiness evidence
         shell: pwsh
         run: ./scripts/test/write-github-actions-evidence.ps1

@@ -182,7 +182,7 @@ function Test-ReleaseReadinessDocumentation {
         'runId=<github run id>',
         'runAttempt=<github run attempt>',
         'runUrl=https://github.com/<owner>/<repo>/actions/runs/<github run id>',
-        'checks=verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest',
+        'checks=verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, connectedDebugAndroidTest',
         'verify-release-readiness.ps1'
     )
 
@@ -266,7 +266,7 @@ function Test-ReleaseArtifactNaming {
     Assert-Equal `
         -Name 'required GitHub Actions checks' `
         -Actual ((Get-AndroidVocabularyRequiredGitHubActionsChecks) -join ', ') `
-        -Expected 'verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest'
+        -Expected 'verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, connectedDebugAndroidTest'
 
     $releaseScript = Get-Content `
         -LiteralPath (Join-AndroidVocabularyPath $repoRoot @('scripts', 'release', 'build-release.ps1')) `
@@ -641,13 +641,27 @@ function Test-ReleaseArtifactNaming {
             'NVD_API_KEY: ${{ secrets.NVD_API_KEY }}',
             'if: ${{ env.NVD_API_KEY != '''' }}',
             'run: ./gradlew --no-daemon --console=plain dependencyCheckAggregate',
-            'ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest pixel2Api30DebugAndroidTest',
+            'ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest',
+            'run: bash ./scripts/test/run-ci-emulator-tests.sh',
             'run: ./scripts/test/write-github-actions-evidence.ps1',
             'name: github-actions-release-evidence',
             'path: build/release-readiness/github-actions-evidence.txt'
         )) {
         if ($workflow -notmatch [regex]::Escape($pattern)) {
             throw "android.yml must keep release readiness evidence aligned with local checks: $pattern"
+        }
+    }
+
+    $ciEmulatorScript = Get-Content `
+        -LiteralPath (Join-AndroidVocabularyPath $repoRoot @('scripts', 'test', 'run-ci-emulator-tests.sh')) `
+        -Raw
+    foreach ($pattern in @(
+            'system-images;android-30;aosp_atd;x86',
+            '-no-snapshot',
+            'connectedDebugAndroidTest'
+        )) {
+        if ($ciEmulatorScript -notmatch [regex]::Escape($pattern)) {
+            throw "run-ci-emulator-tests.sh must keep API 30 connected test coverage: $pattern"
         }
     }
 

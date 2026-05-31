@@ -25,7 +25,7 @@ Windows PowerShell 推荐直接运行：
 .\gradlew.bat ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest
 ```
 
-本地脚本只编译 androidTest APK，不启动 managed device；`pixel2Api30DebugAndroidTest` 由 GitHub Actions 运行，或在已配置模拟器环境时手动执行。
+本地脚本只编译 androidTest APK，不启动模拟器；`connectedDebugAndroidTest` 由 GitHub Actions 在 API 30 ATD 模拟器中运行，或在已配置设备环境时手动执行。
 
 发布、smoke 和设备验收脚本自身改动后，也可以单独运行轻量回归检查：
 
@@ -70,7 +70,8 @@ GitHub Actions 执行：
 
 - `scripts/test/verify-release-scripts.ps1`
 - `scripts/test/verify-vocab-assets.ps1`
-- `./gradlew ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest pixel2Api30DebugAndroidTest`
+- `./gradlew ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest`
+- API 30 ATD 模拟器中的 `./gradlew connectedDebugAndroidTest`
 - 配置 `NVD_API_KEY` 时执行 `./gradlew dependencyCheckAggregate`
 
 `dependencyCheckAggregate` 需要 NVD API key；本地设置 `NVD_API_KEY` 环境变量，或传入 `-PnvdApiKey=<key>`。GitHub Actions 未配置同名 repository secret 时会跳过该可选漏洞扫描，避免把缺少外部 secret 误判为代码验证失败；直接运行 dependency-check 任务但未设置 key 时，Gradle 仍会 fail-fast。
@@ -114,7 +115,7 @@ repository=<owner>/<repo>
 runId=<github run id>
 runAttempt=<github run attempt>
 runUrl=https://github.com/<owner>/<repo>/actions/runs/<github run id>
-checks=verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest
+checks=verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, connectedDebugAndroidTest
 ```
 
 `verify-release-readiness.ps1` 会同时校验 `serverUrl`、`repository`、`runId` 和 `runUrl` 是否一致，并要求 `serverUrl=https://github.com`，避免误用其他仓库或其他 GitHub 实例的 workflow 结果。
@@ -160,6 +161,6 @@ AAB smoke 会先用 `jarsigner -verify` 校验 AAB 本身；验签失败且未�
 - 统计不能从 ReviewLog / ReviewCard 复算。
 - 今日队列或设置重启后丢失。
 - `ktlintCheck`、`detekt`、`testDebugUnitTest`、`assembleDebug`、`assembleDebugAndroidTest` 任一失败。
-- GitHub Actions 中 `pixel2Api30DebugAndroidTest` 失败。
+- GitHub Actions 中 API 30 模拟器 `connectedDebugAndroidTest` 失败。
 - 已签名 release APK 未通过真机/模拟器 smoke。
 - 上传应用商店前，release AAB 未通过签名验证或 AAB 安装级验收。

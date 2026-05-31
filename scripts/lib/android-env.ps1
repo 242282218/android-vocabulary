@@ -68,7 +68,7 @@ function Get-AndroidVocabularyRequiredGitHubActionsChecks {
         'testDebugUnitTest',
         'assembleDebug',
         'assembleDebugAndroidTest',
-        'pixel2Api30DebugAndroidTest'
+        'connectedDebugAndroidTest'
     )
 }
 

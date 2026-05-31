@@ -212,7 +212,7 @@ keytool -genkeypair `
 1. 确认 `gradle.properties` 中 `androidVocab.versionCode` 已递增，`androidVocab.versionName` 与本次 release 一致。
 2. 确认 release keystore 已离线备份，且当前 shell 已设置完整签名环境变量。
 3. 运行 `.\scripts\test\verify-local.ps1`，确认 release 脚本回归、publish-safe 词库、静态检查、单元测试、debug APK 和 androidTest APK 编译全部通过。
-4. 确认 GitHub Actions 对当前提交通过，尤其是 `verify-release-scripts.ps1` 和 `pixel2Api30DebugAndroidTest` 质量门。
+4. 确认 GitHub Actions 对当前提交通过，尤其是 `verify-release-scripts.ps1` 和 API 30 模拟器中的 `connectedDebugAndroidTest` 质量门。
 5. 运行 `.\scripts\release\build-release.ps1`，不得使用 `-AllowUnsigned`；输出必须包含 `[ok] release APK signature verified`。
 6. 连接目标真机或模拟器，运行 `.\scripts\test\smoke-release-apk.ps1 -DeviceSerial <serial>`，确认已签名 APK 可安装、启动、首屏渲染且无崩溃日志。
 7. 运行 `.\scripts\release\build-bundle.ps1`，不得使用 `-AllowUnsigned`；输出必须包含 `[ok] release AAB signature verified`。
@@ -229,7 +229,7 @@ repository=<owner>/<repo>
 runId=<github run id>
 runAttempt=<github run attempt>
 runUrl=https://github.com/<owner>/<repo>/actions/runs/<github run id>
-checks=verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest
+checks=verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, connectedDebugAndroidTest
 ```
 
 `verify-release-readiness.ps1` 会同时校验 `serverUrl`、`repository`、`runId` 和 `runUrl` 是否一致，并要求 `serverUrl=https://github.com`，避免误用其他仓库或其他 GitHub 实例的 workflow 结果。
@@ -323,7 +323,7 @@ adb install -r .\dist\AndroidVocabulary-release-v<versionName>-<versionCode>.apk
 
 - `scripts\test\verify-vocab-assets.ps1` 失败。
 - `ktlintCheck`、`detekt`、`testDebugUnitTest`、`assembleRelease` 任一失败。
-- GitHub Actions 中 `assembleDebugAndroidTest` 或 `pixel2Api30DebugAndroidTest` 失败。
+- GitHub Actions 中 `assembleDebugAndroidTest` 或 API 30 模拟器 `connectedDebugAndroidTest` 失败。
 - `app/src/main/assets/vocab/sources.json` 缺失。
 - release 产物包含 publish-blocking 来源派生数据。
 - 未配置正式签名密钥却对外分发。
