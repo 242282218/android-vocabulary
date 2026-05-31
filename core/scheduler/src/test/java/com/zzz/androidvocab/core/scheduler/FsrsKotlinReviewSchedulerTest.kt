@@ -4,6 +4,7 @@ import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.ReviewCard
 import com.zzz.androidvocab.core.model.ReviewRating
 import com.zzz.androidvocab.core.model.ReviewState
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
@@ -91,6 +92,12 @@ class FsrsKotlinReviewSchedulerTest {
                 ).nextCard
 
         assertTrue(result.scheduledDays in 0..7)
+    }
+
+    @Test
+    fun durationMsIsClampedBeforeFsrsIntConversion() {
+        assertEquals(0, (-1L).toFsrsDurationMs())
+        assertEquals(Int.MAX_VALUE, Long.MAX_VALUE.toFsrsDurationMs())
     }
 
     private fun input(

@@ -1,12 +1,9 @@
 package com.zzz.androidvocab
 
-import android.Manifest
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBars
@@ -67,31 +64,21 @@ class MainActivity : ComponentActivity() {
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
             val settings by viewModel.settings.collectAsStateWithLifecycle()
             val context = LocalContext.current
-            var hasNotificationPermission by remember { mutableStateOf(hasPostNotificationsPermission(context)) }
+            var notificationAccess by remember { mutableStateOf(readNotificationAccess(context)) }
             LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-                hasNotificationPermission = hasPostNotificationsPermission(context)
+                // Keep resume sync state-only so we do not push an already pending reminder to tomorrow.
+                notificationAccess = readNotificationAccess(context)
             }
-            val notificationPermissionLauncher =
-                rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-                    hasNotificationPermission = isGranted
-                    if (!isGranted) {
-                        viewModel.disableReminder()
-                    }
-                }
             LaunchedEffect(
                 settings.reminderEnabled,
                 settings.reminderHour,
                 settings.reminderMinute,
-                hasNotificationPermission,
+                notificationAccess,
             ) {
-                when (reminderSyncAction(settings.reminderEnabled, hasNotificationPermission)) {
+                when (reminderSyncAction(settings.reminderEnabled, notificationAccess)) {
                     ReminderSyncAction.Schedule ->
                         reminderScheduler.scheduleDailyReminder(settings.reminderHour, settings.reminderMinute)
                     ReminderSyncAction.Cancel -> reminderScheduler.cancelDailyReminder()
-                    ReminderSyncAction.RequestPermission -> {
-                        reminderScheduler.cancelDailyReminder()
-                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    }
                 }
             }
             VocabTheme(themeMode = themeMode) {
@@ -106,49 +93,7 @@ private fun VocabApp() {
     val navController = rememberNavController()
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            val backStack by navController.currentBackStackEntryAsState()
-            val current = backStack?.destination
-            Surface(
-                modifier =
-                    Modifier
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .windowInsetsPadding(WindowInsets.navigationBars),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                shape = RoundedCornerShape(18.dp),
-                border = BorderStroke(0.65.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.72f)),
-                tonalElevation = 0.dp,
-                shadowElevation = 0.dp,
-            ) {
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 0.dp,
-                ) {
-                    AppTab.entries.forEach { tab ->
-                        NavigationBarItem(
-                            selected = current?.hierarchy?.any { it.route == tab.route } == true,
-                            onClick = {
-                                navController.navigate(tab.route) {
-                                    launchSingleTop = true
-                                    restoreState = true
-                                    popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                }
-                            },
-                            icon = { Icon(tab.icon(), contentDescription = tab.label) },
-                            label = { Text(tab.label) },
-                            colors =
-                                NavigationBarItemDefaults.colors(
-                                    selectedIconColor = MaterialTheme.colorScheme.primary,
-                                    selectedTextColor = MaterialTheme.colorScheme.primary,
-                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                ),
-                        )
-                    }
-                }
-            }
-        },
+        bottomBar = { VocabBottomBar(navController) },
     ) { padding ->
         NavHost(
             navController = navController,
@@ -162,6 +107,51 @@ private fun VocabApp() {
             composable(AppTab.Wordbook.route) { WordbookRoute() }
             composable(AppTab.Stats.route) { StatsRoute() }
             composable(AppTab.Settings.route) { SettingsRoute() }
+        }
+    }
+}
+
+@Composable
+private fun VocabBottomBar(navController: androidx.navigation.NavHostController) {
+    val backStack by navController.currentBackStackEntryAsState()
+    val current = backStack?.destination
+    Surface(
+        modifier =
+            Modifier
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .windowInsetsPadding(WindowInsets.navigationBars),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(0.65.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.72f)),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        NavigationBar(
+            containerColor = MaterialTheme.colorScheme.surface,
+            tonalElevation = 0.dp,
+        ) {
+            AppTab.entries.forEach { tab ->
+                NavigationBarItem(
+                    selected = current?.hierarchy?.any { it.route == tab.route } == true,
+                    onClick = {
+                        navController.navigate(tab.route) {
+                            launchSingleTop = true
+                            restoreState = true
+                            popUpTo(navController.graph.startDestinationId) { saveState = true }
+                        }
+                    },
+                    icon = { Icon(tab.icon(), contentDescription = tab.label) },
+                    label = { Text(tab.label) },
+                    colors =
+                        NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                )
+            }
         }
     }
 }

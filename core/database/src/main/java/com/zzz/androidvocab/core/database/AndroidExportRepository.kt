@@ -25,6 +25,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
+import java.security.MessageDigest
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 
@@ -38,14 +39,18 @@ class AndroidExportRepository
         private val clockProvider: ClockProvider,
     ) : ExportRepository {
         private val json = Json { prettyPrint = true }
+        private val checksumJson = Json
 
         override suspend fun exportUserData(): ExportResult =
             withContext(Dispatchers.IO) {
                 runCatching {
                     val exportedAt = clockProvider.now()
-                    val fileName = "android-vocab-export-${DateTimeFormatter.ofPattern(
-                        "yyyyMMdd-HHmmss",
-                    ).withZone(clockProvider.zoneId()).format(exportedAt)}.json"
+                    val fileName =
+                        "android-vocab-export-${
+                            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
+                                .withZone(clockProvider.zoneId())
+                                .format(exportedAt)
+                        }.json"
                     val exportsDir = exportDirectory()
                     val output = File(exportsDir, fileName)
                     val settings = settingsRepository.settings.firstValue()
@@ -56,36 +61,17 @@ class AndroidExportRepository
                             updatedAt = exportedAt,
                         ),
                     )
-                    val payload =
+                    val payloadJson = buildExportPayload(exportedAt, settingsJson)
+                    val checksum = calculateChecksum(checksumJson.encodeToString(payloadJson))
+                    val finalPayload =
                         buildJsonObject {
-                            put("exportedAt", exportedAt.toString())
-                            put("appVersion", appVersion())
-                            put("databaseVersion", VOCAB_DATABASE_VERSION)
-                            put("vocabularyManifest", exportDao.sourceManifest()?.json.toJsonPayload())
-                            put("latestImportRun", exportDao.latestImportRun()?.toJson() ?: JsonNull)
-                            put("algorithm", "fsrs/java-fsrs-1.0.0")
-                            put("settings", settingsJson)
-                            put("dataIntegrity", inspectDataIntegrity())
-                            put(
-                                "reviewCards",
-                                buildJsonArray {
-                                    exportDao.reviewCards().forEach { add(it.toJson()) }
-                                },
-                            )
-                            put(
-                                "reviewLogs",
-                                buildJsonArray {
-                                    exportDao.reviewLogs().forEach { add(it.toJson()) }
-                                },
-                            )
-                            put(
-                                "dailyStats",
-                                buildJsonArray {
-                                    exportDao.dailyStatsFromLogs().forEach { add(it.toJson(exportedAt)) }
-                                },
-                            )
+                            payloadJson.forEach { (key, value) -> put(key, value) }
+                            put("checksum", checksum)
                         }
-                    output.writeText(json.encodeToString(payload))
+                    output.writeText(json.encodeToString(finalPayload))
+                    output.setReadable(true, false)
+                    output.setWritable(true, true)
+                    output.setExecutable(false, false)
                     ExportResult(fileName = fileName, absolutePath = output.absolutePath)
                 }.getOrElse { error ->
                     if (error is CancellationException) throw error
@@ -94,11 +80,43 @@ class AndroidExportRepository
                 }
             }
 
+        private suspend fun buildExportPayload(
+            exportedAt: java.time.Instant,
+            settingsJson: JsonObject,
+        ): JsonObject =
+            buildJsonObject {
+                put("exportedAt", exportedAt.toString())
+                put("appVersion", appVersion())
+                put("databaseVersion", VOCAB_DATABASE_VERSION)
+                put("checksumAlgorithm", CHECKSUM_ALGORITHM)
+                put("checksumScope", CHECKSUM_SCOPE)
+                put("vocabularyManifest", exportDao.sourceManifest()?.json.toJsonPayload())
+                put("latestImportRun", exportDao.latestImportRun()?.toJson() ?: JsonNull)
+                put("algorithm", FSRS_ALGORITHM_VERSION)
+                put("settings", settingsJson)
+                put("dataIntegrity", inspectDataIntegrity())
+                put(
+                    "reviewCards",
+                    buildJsonArray {
+                        exportDao.reviewCards().forEach { add(it.toJson()) }
+                    },
+                )
+                put(
+                    "reviewLogs",
+                    buildJsonArray {
+                        exportDao.reviewLogs().forEach { add(it.toJson()) }
+                    },
+                )
+                put(
+                    "dailyStats",
+                    buildJsonArray {
+                        exportDao.dailyStatsFromLogs().forEach { add(it.toJson(exportedAt)) }
+                    },
+                )
+            }
+
         private fun exportDirectory(): File {
-            val externalDir =
-                context.getExternalFilesDir(null)
-                    ?: error("External files directory is unavailable")
-            val exportsDir = File(externalDir, "exports")
+            val exportsDir = File(context.filesDir, EXPORTS_DIRECTORY_NAME)
             if (!exportsDir.exists() && !exportsDir.mkdirs()) {
                 error("Cannot create exports directory: ${exportsDir.absolutePath}")
             }
@@ -106,6 +124,12 @@ class AndroidExportRepository
                 error("Export path is not a directory: ${exportsDir.absolutePath}")
             }
             return exportsDir
+        }
+
+        private fun calculateChecksum(data: String): String {
+            val digest = MessageDigest.getInstance(CHECKSUM_ALGORITHM)
+            val hash = digest.digest(data.toByteArray(Charsets.UTF_8))
+            return hash.joinToString("") { "%02x".format(it) }
         }
 
         private fun appVersion(): String =
@@ -211,21 +235,18 @@ private fun ReviewDataIntegrityReport.toJson(): JsonObject =
         put("inconsistentCacheCount", inconsistentCacheCount)
         put("legacyLogCardCount", legacyLogCardCount)
         put("orphanLogCount", orphanLogCount)
+        put("malformedLogCardCount", malformedLogCardCount)
+        put("dailyStatsDays", dailyStatsDays)
+        put("missingDailyStatsCount", missingDailyStatsCount)
+        put("inconsistentDailyStatsCount", inconsistentDailyStatsCount)
+        put("timelineConflictCardCount", timelineConflictCardCount)
         put("repairableIssueCount", repairableIssueCount)
         put("manualReviewIssueCount", manualReviewIssueCount)
         put("issueCount", issueCount)
     }
 
-private fun ExportDailyStatsRow.toJson(updatedAt: java.time.Instant): JsonObject {
-    val reviewCount = (completedCount - newCount).coerceAtLeast(0)
-    val recallAccuracy = if (completedCount == 0) 0.0 else (goodCount + easyCount).toDouble() / completedCount
-    val passRate =
-        if (completedCount == 0) {
-            0.0
-        } else {
-            (hardCount + goodCount + easyCount).toDouble() / completedCount
-        }
-    return buildJsonObject {
+private fun ReviewDailyStatsView.toJson(updatedAt: java.time.Instant): JsonObject =
+    buildJsonObject {
         put("localDay", localDay)
         put("newCount", newCount)
         put("reviewCount", reviewCount)
@@ -234,16 +255,14 @@ private fun ExportDailyStatsRow.toJson(updatedAt: java.time.Instant): JsonObject
         put("goodCount", goodCount)
         put("easyCount", easyCount)
         put("completedCount", completedCount)
+        put("durationMs", durationMs)
         put("recallAccuracy", recallAccuracy)
         put("passRate", passRate)
-        put("estimatedMinutes", durationMs.toCompletedMinutes())
+        put("estimatedMinutes", estimatedMinutes)
         put("updatedAt", updatedAt.toString())
     }
-}
 
-private fun Long.toCompletedMinutes(): Int {
-    if (this <= 0L) return 0
-    return ((this + MILLIS_PER_MINUTE - 1) / MILLIS_PER_MINUTE).toInt()
-}
-
-private const val MILLIS_PER_MINUTE = 60_000L
+private const val CHECKSUM_ALGORITHM = "SHA-256"
+private const val CHECKSUM_SCOPE = "payload-json-excluding-checksum"
+private const val FSRS_ALGORITHM_VERSION = "fsrs/java-fsrs-1.0.0"
+private const val EXPORTS_DIRECTORY_NAME = "exports"

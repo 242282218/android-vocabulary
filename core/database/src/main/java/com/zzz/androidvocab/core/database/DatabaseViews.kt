@@ -3,6 +3,62 @@ package com.zzz.androidvocab.core.database
 import androidx.room.DatabaseView
 import java.time.Instant
 
+internal const val REVIEW_DAILY_STATS_VIEW_NAME = "review_daily_stats"
+
+internal const val FIRST_REVIEWS_VIEW_NAME = "first_reviews"
+
+internal const val LOGICAL_REVIEW_CARD_ID_SQL = "l.bookCode || '|' || l.wordId"
+internal const val CANDIDATE_LOGICAL_REVIEW_CARD_MATCH_SQL =
+    "candidate.wordId = l.wordId AND candidate.bookCode = l.bookCode"
+
+internal const val FIRST_REVIEWS_VIEW_SQL =
+    "SELECT $LOGICAL_REVIEW_CARD_ID_SQL AS cardId, l.id AS firstLogId, l.reviewedAt AS firstReviewedAt " +
+        "FROM valid_review_logs l " +
+        "WHERE l.id = (" +
+        "SELECT candidate.id FROM valid_review_logs candidate " +
+        "WHERE $CANDIDATE_LOGICAL_REVIEW_CARD_MATCH_SQL " +
+        "ORDER BY candidate.reviewedAt ASC, candidate.id ASC " +
+        "LIMIT 1" +
+        ")"
+
+internal const val REVIEW_DAILY_STATS_VIEW_SQL =
+    "SELECT " +
+        "localDay, " +
+        "newCount, " +
+        "(completedCount - newCount) AS reviewCount, " +
+        "againCount, " +
+        "hardCount, " +
+        "goodCount, " +
+        "easyCount, " +
+        "completedCount, " +
+        "durationMs, " +
+        "CASE " +
+        "WHEN completedCount = 0 THEN 0.0 " +
+        "ELSE CAST(goodCount + easyCount AS REAL) / completedCount " +
+        "END AS recallAccuracy, " +
+        "CASE " +
+        "WHEN completedCount = 0 THEN 0.0 " +
+        "ELSE CAST(hardCount + goodCount + easyCount AS REAL) / completedCount " +
+        "END AS passRate, " +
+        "CASE " +
+        "WHEN durationMs <= 0 THEN 0 " +
+        "ELSE CAST((durationMs + 59999) / 60000 AS INTEGER) " +
+        "END AS estimatedMinutes " +
+        "FROM (" +
+        "SELECT " +
+        "l.localDay AS localDay, " +
+        "SUM(CASE WHEN f.firstLogId = l.id THEN 1 ELSE 0 END) AS newCount, " +
+        "SUM(CASE WHEN l.rating = 'again' THEN 1 ELSE 0 END) AS againCount, " +
+        "SUM(CASE WHEN l.rating = 'hard' THEN 1 ELSE 0 END) AS hardCount, " +
+        "SUM(CASE WHEN l.rating = 'good' THEN 1 ELSE 0 END) AS goodCount, " +
+        "SUM(CASE WHEN l.rating = 'easy' THEN 1 ELSE 0 END) AS easyCount, " +
+        "COUNT(*) AS completedCount, " +
+        "IFNULL(SUM(l.durationMs), 0) AS durationMs " +
+        "FROM valid_review_logs l " +
+        "JOIN $FIRST_REVIEWS_VIEW_NAME f ON f.cardId = ($LOGICAL_REVIEW_CARD_ID_SQL) " +
+        "GROUP BY l.localDay" +
+        ") daily"
+
 @DatabaseView(
     viewName = "valid_review_logs",
     value =
@@ -32,6 +88,35 @@ data class ValidReviewLogView(
     val algorithmVersion: String,
     val stateAfter: String?,
     val dueAtAfter: Instant?,
+)
+
+@DatabaseView(
+    viewName = FIRST_REVIEWS_VIEW_NAME,
+    value = FIRST_REVIEWS_VIEW_SQL,
+)
+data class FirstReviewView(
+    val cardId: String,
+    val firstLogId: String,
+    val firstReviewedAt: Instant,
+)
+
+@DatabaseView(
+    viewName = REVIEW_DAILY_STATS_VIEW_NAME,
+    value = REVIEW_DAILY_STATS_VIEW_SQL,
+)
+data class ReviewDailyStatsView(
+    val localDay: String,
+    val newCount: Int,
+    val reviewCount: Int,
+    val againCount: Int,
+    val hardCount: Int,
+    val goodCount: Int,
+    val easyCount: Int,
+    val completedCount: Int,
+    val durationMs: Long,
+    val recallAccuracy: Double,
+    val passRate: Double,
+    val estimatedMinutes: Int,
 )
 
 @DatabaseView(

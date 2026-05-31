@@ -103,6 +103,39 @@ class ReviewDaoQueueTest {
             assertEquals(listOf(knownCardId), database.reviewDao().getCardIdsMissingCacheFromLogs())
         }
 
+    @Test
+    fun reviewLogsUseIdTieBreakerForSameReviewedAt() =
+        runTest {
+            val now = Instant.parse("2026-05-16T08:00:00Z")
+            val reviewedAt = now.minusSeconds(1_800)
+            seedWord(wordId = "known-word", value = "known", orderIndex = 0, now = now)
+            val knownCardId = cardId("known-word", BookCode.CET4.name)
+            database.reviewDao().insertLog(
+                reviewLog(
+                    id = "log-b",
+                    cardId = knownCardId,
+                    wordId = "known-word",
+                    rating = ReviewRating.Easy,
+                    now = now,
+                    reviewedAt = reviewedAt,
+                ),
+            )
+            database.reviewDao().insertLog(
+                reviewLog(
+                    id = "log-a",
+                    cardId = knownCardId,
+                    wordId = "known-word",
+                    rating = ReviewRating.Again,
+                    now = now,
+                    reviewedAt = reviewedAt,
+                ),
+            )
+
+            assertEquals(listOf("log-a", "log-b"), database.reviewDao().getLogs(knownCardId).map { it.id })
+            assertEquals(listOf("log-a", "log-b"), database.reviewDao().getLogsForMissingCacheCards().map { it.id })
+            assertEquals(listOf("log-a", "log-b"), database.exportDao().reviewLogs().map { it.id })
+        }
+
     private suspend fun seedWord(
         wordId: String,
         value: String,
@@ -170,13 +203,14 @@ class ReviewDaoQueueTest {
         wordId: String,
         rating: ReviewRating,
         now: Instant,
+        reviewedAt: Instant = now.minusSeconds(1_800),
     ) = ReviewLogEntity(
         id = id,
         cardId = cardId,
         wordId = wordId,
         bookCode = BookCode.CET4.name,
         rating = rating.wireName,
-        reviewedAt = now.minusSeconds(1_800),
+        reviewedAt = reviewedAt,
         localDay = "2026-05-16",
         elapsedDays = 0,
         scheduledDaysBefore = 3,

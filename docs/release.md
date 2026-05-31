@@ -33,6 +33,8 @@ dist/AndroidVocabulary-release-v<versionName>-<versionCode>.apk
 dist/AndroidVocabulary-build-validation-v<versionName>-<versionCode>.apk
 ```
 
+`-AllowUnsigned` 不会替换 `dist/AndroidVocabulary-release-v<versionName>-<versionCode>.apk`。如果 `dist/` 里已有当前版本的旧 release 命名 APK，`verify-release-artifacts.ps1` 仍会审计那个文件，并在未签名或签名不匹配时失败。正式发布前必须用不带 `-AllowUnsigned` 的签名构建替换它；若旧文件只是历史证据，应先有意识地移出或归档到 `dist/` 外，不要把 build-validation 产物当作发布产物。
+
 ## Android App Bundle
 
 面向 Google Play 或需要 AAB 交付时，使用独立脚本构建并归档：
@@ -63,6 +65,8 @@ jarsigner -verify -certs .\app\build\outputs\bundle\release\app-release.aab
 ```text
 dist/AndroidVocabulary-build-validation-v<versionName>-<versionCode>.aab
 ```
+
+`-AllowUnsigned` 同样不会替换 `dist/AndroidVocabulary-release-v<versionName>-<versionCode>.aab`。如果当前版本 release 命名 AAB 是旧的或未签名，`verify-release-artifacts.ps1` 和最终 readiness 都会继续失败，直到用正式签名的 AAB 覆盖，或人工把旧 release 命名文件移出 `dist/` 后重新执行正式构建。
 
 ## AAB 安装级验证
 
@@ -111,6 +115,96 @@ keytool -genkeypair `
 
 不要把 keystore 或密码提交到仓库。
 
+## Release Readiness 证据速查
+
+最终门禁是：
+
+```powershell
+.\scripts\test\verify-release-readiness.ps1
+```
+
+这个脚本不会自己生成发布证据，它只会读取并归档 4 类上游 evidence。正式 release 前，建议按下面顺序准备：
+
+1. `release artifacts`
+   - 生成方式：
+
+```powershell
+.\scripts\release\build-release.ps1
+.\scripts\release\build-bundle.ps1
+.\scripts\test\verify-release-artifacts.ps1
+```
+
+   - 关键文件：
+     - `dist/AndroidVocabulary-release-v<versionName>-<versionCode>.apk`
+     - `dist/AndroidVocabulary-release-v<versionName>-<versionCode>.aab`
+     - `build/release-artifacts/release-artifacts-run.txt`
+   - 用途：
+     - 证明当前版本 release 命名 APK/AAB 已签名
+     - 记录 APK/AAB 的 SHA-256
+     - 识别 `staleCurrentVersionArtifacts`
+
+2. `APK smoke`
+   - 生成方式：
+
+```powershell
+.\scripts\test\smoke-release-apk.ps1 -DeviceSerial <serial>
+```
+
+   - 关键文件：
+     - `build/apk-smoke/smoke-release-apk-run.txt`
+   - 用途：
+     - 证明当前 release APK 可安装、启动、首屏可见
+     - 记录 `apkSha256`，供 readiness 比对当前 release APK
+
+3. `device verification`
+   - 生成方式：
+
+```powershell
+.\scripts\test\verify-device.ps1 -DeviceSerial <serial> -SkipBundleBuild -BundlePath .\dist\AndroidVocabulary-release-v<versionName>-<versionCode>.aab
+```
+
+   - 关键文件：
+     - `build/device-verification/v<versionName>-<versionCode>-<timestamp>/verification-completed.txt`
+     - 同目录下的 `smoke-release-bundle-run.txt`
+   - 用途：
+     - 证明当前 release AAB 通过 instrumentation、bundle 安装和首屏 smoke
+     - 记录 `bundleSha256`、`bundleSmokeBundleSha256` 和 APK Set 签名类型
+
+4. `GitHub Actions evidence`
+   - 生成方式：
+     - 从当前 `HEAD` 对应的成功 Android workflow 下载 artifact：`github-actions-release-evidence`
+   - 关键文件：
+     - `build/release-readiness/github-actions-evidence.txt`
+   - 来源：
+     - `.github/workflows/android.yml` 中的 `Write release readiness evidence`
+     - `scripts/test/write-github-actions-evidence.ps1`
+   - 用途：
+     - 证明当前提交已通过 CI 质量门
+
+四类 evidence 就绪后，再运行：
+
+```powershell
+.\scripts\test\verify-release-readiness.ps1 `
+  -GitHubActionsEvidencePath .\build\release-readiness\github-actions-evidence.txt `
+  -ReleaseArtifactsEvidencePath .\build\release-artifacts\release-artifacts-run.txt `
+  -ApkSmokeEvidencePath .\build\apk-smoke\smoke-release-apk-run.txt `
+  -DeviceVerificationEvidencePath .\build\device-verification\v<versionName>-<versionCode>-<timestamp>\verification-completed.txt
+```
+
+输出文件：
+
+- `build/release-readiness/release-readiness-run.txt`
+- `build/release-readiness/evidence-*.txt`
+
+失败时优先看这两个字段：
+
+- `blockerSummary`
+  - 用一句话概括当前阻断点
+- `blockerActionSummary`
+  - 用一句话列出建议的下一步动作顺序
+
+如果 `blockerSummary` 已经包含 `staleCurrentVersionArtifacts`、missing smoke、missing device verification 或 missing GitHub Actions evidence，就先按 `blockerActionSummary` 的顺序处理，不要直接从长串 `failureMessage` 开始排查。
+
 ## 发布前 Checklist
 
 正式对外分发前按以下顺序执行，避免把本地编译验证误当成可发布结果：
@@ -122,7 +216,7 @@ keytool -genkeypair `
 5. 运行 `.\scripts\release\build-release.ps1`，不得使用 `-AllowUnsigned`；输出必须包含 `[ok] release APK signature verified`。
 6. 连接目标真机或模拟器，运行 `.\scripts\test\smoke-release-apk.ps1 -DeviceSerial <serial>`，确认已签名 APK 可安装、启动、首屏渲染且无崩溃日志。
 7. 运行 `.\scripts\release\build-bundle.ps1`，不得使用 `-AllowUnsigned`；输出必须包含 `[ok] release AAB signature verified`。
-8. 运行 `.\scripts\test\verify-release-artifacts.ps1`，确认 `dist/` 中当前版本 release 命名 APK/AAB 都已验签；输出必须包含 `[ok] release artifacts verified`，并在 `build\release-artifacts\release-artifacts-run.txt` 中记录 APK/AAB SHA-256。
+8. 运行 `.\scripts\test\verify-release-artifacts.ps1`，确认 `dist/` 中当前版本 release 命名 APK/AAB 都已验签；输出必须包含 `[ok] release artifacts verified`，并在 `build\release-artifacts\release-artifacts-run.txt` 中记录 APK/AAB SHA-256。如果这一步失败且 metadata 出现 `releaseArtifactsRemediation`，按提示重新执行不带 `-AllowUnsigned` 的签名构建；旧 release 命名产物只应在确认是历史证据后人工移出或归档到 `dist/` 外。
 9. 安装 bundletool 后运行 `.\scripts\test\verify-device.ps1 -DeviceSerial <serial> -SkipBundleBuild -BundlePath .\dist\AndroidVocabulary-release-v<versionName>-<versionCode>.aab`，不得使用 `-AllowUnsignedBundle` 或 `-AllowDebugSigning`；确认 `connectedDebugAndroidTest`、AAB 拆包安装和首屏 smoke 均通过。
 10. 从 GitHub Actions 成功运行中下载 `github-actions-release-evidence` artifact，并将其中的 `github-actions-evidence.txt` 保存到本地，例如 `build\release-readiness\github-actions-evidence.txt`。文件格式为每行 `key=value`：
 
@@ -130,13 +224,19 @@ keytool -genkeypair `
 workflow=Android
 conclusion=success
 commitSha=<git rev-parse HEAD>
+serverUrl=https://github.com
+repository=<owner>/<repo>
 runId=<github run id>
 runAttempt=<github run attempt>
 runUrl=https://github.com/<owner>/<repo>/actions/runs/<github run id>
-checks=verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest
+checks=verify-release-scripts, verify-vocab-assets, dependencyCheckAggregate, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest
 ```
 
-11. 运行 `.\scripts\test\verify-release-readiness.ps1 -GitHubActionsEvidencePath .\build\release-readiness\github-actions-evidence.txt -ReleaseArtifactsEvidencePath .\build\release-artifacts\release-artifacts-run.txt -ApkSmokeEvidencePath .\build\apk-smoke\smoke-release-apk-run.txt -DeviceVerificationEvidencePath .\build\device-verification\v<versionName>-<versionCode>-<timestamp>\verification-completed.txt`，确认输出 `[ok] release readiness verified`；该门禁会重算当前 `dist/` release 产物 SHA-256 并与第 8 步审计记录比对，也会要求 APK smoke metadata 中的 `apkSha256` 与 release APK 一致、设备 AAB 验收 metadata 中的 `bundleSha256`、父日志摘要里的 `bundleSmokeBundleSha256` 以及归档 bundle smoke 子日志原文里的 `bundleSha256` 都与 release AAB 一致。未传 `-ReleaseArtifactsEvidencePath` / `-ApkSmokeEvidencePath` 时会沿用默认 metadata；未传 `-DeviceVerificationEvidencePath` 时会从设备验收完成记录中选择最新且匹配当前版本和 release AAB SHA-256 的记录。正式发布建议显式传入本次保留的三个本地 evidence 文件；readiness 会把本次读取到的 evidence 复制到 `build\release-readiness\evidence-*.txt` 并记录归档文件 SHA-256，包括设备验收父日志及其指向的 bundle smoke 子日志，同时在 `evidenceArchives` 中汇总归档清单。
+`verify-release-readiness.ps1` 会同时校验 `serverUrl`、`repository`、`runId` 和 `runUrl` 是否一致，并要求 `serverUrl=https://github.com`，避免误用其他仓库或其他 GitHub 实例的 workflow 结果。
+
+`dependencyCheckAggregate` 依赖 NVD API key。CI 必须配置 `NVD_API_KEY` repository secret；本地可设置同名环境变量，或传入 `-PnvdApiKey=<key>`。未设置时 Gradle 会在 dependency-check 任务开始前直接失败，避免退化为慢速 NVD 403/404。
+
+11. 运行 `.\scripts\test\verify-release-readiness.ps1 -GitHubActionsEvidencePath .\build\release-readiness\github-actions-evidence.txt -ReleaseArtifactsEvidencePath .\build\release-artifacts\release-artifacts-run.txt -ApkSmokeEvidencePath .\build\apk-smoke\smoke-release-apk-run.txt -DeviceVerificationEvidencePath .\build\device-verification\v<versionName>-<versionCode>-<timestamp>\verification-completed.txt`，确认输出 `[ok] release readiness verified`；该门禁会要求当前 Git worktree 干净，避免本地 release 产物来自未经 CI 验证的源码状态；同时会重算当前 `dist/` release 产物 SHA-256 并与第 8 步审计记录比对，也会要求 APK smoke metadata 中的 `apkSha256` 与 release APK 一致、设备 AAB 验收 metadata 中的 `bundleSha256`、父日志摘要里的 `bundleSmokeBundleSha256` 以及归档 bundle smoke 子日志原文里的 `bundleSha256` 都与 release AAB 一致。未传 `-ReleaseArtifactsEvidencePath` / `-ApkSmokeEvidencePath` 时会沿用默认 metadata；未传 `-DeviceVerificationEvidencePath` 时会从设备验收完成记录中选择最新且匹配当前版本和 release AAB SHA-256 的记录。正式发布建议显式传入本次保留的三个本地 evidence 文件；readiness 会把本次读取到的 evidence 复制到 `build\release-readiness\evidence-*.txt` 并记录归档文件 SHA-256，包括设备验收父日志及其指向的 bundle smoke 子日志，同时在 `evidenceArchives` 中汇总归档清单。失败时 metadata 会按 requirement 写入 `*Remediation` 字段，指出下一步修复动作。
 12. 保留 `dist/AndroidVocabulary-release-v<versionName>-<versionCode>.apk`、`dist/AndroidVocabulary-release-v<versionName>-<versionCode>.aab`、`build/release-artifacts/release-artifacts-run.txt`、`build/release-readiness/release-readiness-run.txt`、`build/release-readiness/evidence-*.txt`、GitHub Actions 结果和 `build/device-verification/v<versionName>-<versionCode>-<timestamp>/` 日志作为本次 release 验证记录。
 
 `-AllowUnsigned` 和 `-AllowDebugSigning` 只用于本地构建链路验证。出现 `not release-ready` 或 `not uploadable` 的输出时，该产物不得对外分发或上传应用商店。

@@ -63,6 +63,7 @@ function Get-AndroidVocabularyRequiredGitHubActionsChecks {
     return @(
         'verify-release-scripts',
         'verify-vocab-assets',
+        'dependencyCheckAggregate',
         'ktlintCheck',
         'detekt',
         'testDebugUnitTest',
@@ -185,7 +186,6 @@ function Get-AndroidSdkDir {
     if (-not [string]::IsNullOrWhiteSpace($env:ANDROID_SDK_ROOT)) {
         $candidates += $env:ANDROID_SDK_ROOT
     }
-    $candidates += Join-AndroidVocabularyPath $repoRoot @('.tools', 'android-sdk')
 
     $localPropertiesPath = Join-Path $repoRoot 'local.properties'
     if (Test-Path $localPropertiesPath) {
@@ -195,6 +195,9 @@ function Get-AndroidSdkDir {
             $candidates += $path
         }
     }
+
+    # Prefer explicit SDK roots before the repo-local fallback so emulator/QEMU avoid Unicode path issues.
+    $candidates += Join-AndroidVocabularyPath $repoRoot @('.tools', 'android-sdk')
 
     return $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 }

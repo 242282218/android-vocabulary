@@ -26,6 +26,9 @@ interface StatsDao {
     @Query("SELECT COUNT(*) FROM daily_stats")
     suspend fun dailyStatsCount(): Int
 
+    @Query("SELECT * FROM daily_stats ORDER BY localDay ASC")
+    suspend fun dailyStats(): List<DailyStatsEntity>
+
     @Query(
         """
         INSERT OR REPLACE INTO daily_stats (
@@ -42,159 +45,107 @@ interface StatsDao {
           estimatedMinutes,
           updatedAt
         )
-        WITH first_reviews AS (
-          SELECT cardId, MIN(reviewedAt) AS firstReviewedAt
-          FROM valid_review_logs
-          GROUP BY cardId
-        ),
-        daily AS (
-          SELECT
-            l.localDay AS localDay,
-            SUM(CASE WHEN f.firstReviewedAt = l.reviewedAt THEN 1 ELSE 0 END) AS newCount,
-            SUM(CASE WHEN l.rating = 'again' THEN 1 ELSE 0 END) AS againCount,
-            SUM(CASE WHEN l.rating = 'hard' THEN 1 ELSE 0 END) AS hardCount,
-            SUM(CASE WHEN l.rating = 'good' THEN 1 ELSE 0 END) AS goodCount,
-            SUM(CASE WHEN l.rating = 'easy' THEN 1 ELSE 0 END) AS easyCount,
-            COUNT(*) AS completedCount,
-            IFNULL(SUM(l.durationMs), 0) AS durationMs
-          FROM valid_review_logs l
-          JOIN first_reviews f ON f.cardId = l.cardId
-          GROUP BY l.localDay
-        )
         SELECT
           localDay,
           newCount,
-          completedCount - newCount,
+          reviewCount,
           againCount,
           hardCount,
           goodCount,
           easyCount,
           completedCount,
-          CASE
-            WHEN completedCount = 0 THEN 0.0
-            ELSE CAST(goodCount + easyCount AS REAL) / completedCount
-          END,
-          CASE
-            WHEN completedCount = 0 THEN 0.0
-            ELSE CAST(hardCount + goodCount + easyCount AS REAL) / completedCount
-          END,
-          CASE
-            WHEN durationMs <= 0 THEN 0
-            ELSE CAST((durationMs + 59999) / 60000 AS INTEGER)
-          END,
+          recallAccuracy,
+          passRate,
+          estimatedMinutes,
           :updatedAt
-        FROM daily
+        FROM review_daily_stats
         """,
     )
     suspend fun insertDailyStatsFromLogs(updatedAt: Instant)
 
     @Query(
         """
-        SELECT l.rating, COUNT(*) AS count
-        FROM valid_review_logs l
-        WHERE l.localDay = :localDay
-        GROUP BY l.rating
+        SELECT
+          localDay,
+          newCount,
+          reviewCount,
+          againCount,
+          hardCount,
+          goodCount,
+          easyCount,
+          completedCount,
+          estimatedMinutes,
+          recallAccuracy,
+          passRate,
+          :updatedAt AS updatedAt
+        FROM review_daily_stats
+        WHERE localDay = :localDay
         """,
     )
-    fun observeDailyRatingCounts(localDay: String): Flow<List<DailyRatingCountRow>>
+    suspend fun dailyStatsFromLogs(
+        localDay: String,
+        updatedAt: Instant,
+    ): DailyStatsEntity?
 
     @Query(
         """
-        SELECT l.rating, COUNT(*) AS count
-        FROM valid_review_logs l
-        WHERE l.localDay = :localDay
-        GROUP BY l.rating
+        SELECT * FROM review_daily_stats
+        ORDER BY localDay ASC
         """,
     )
-    suspend fun dailyRatingCounts(localDay: String): List<DailyRatingCountRow>
+    suspend fun dailyStatsFromLogsRows(): List<ReviewDailyStatsView>
 
     @Query(
         """
-        SELECT COUNT(*)
+        SELECT
+          l.localDay AS localDay,
+          SUM(CASE WHEN f.firstLogId = l.id THEN 1 ELSE 0 END) AS newCount,
+          COUNT(*) - SUM(CASE WHEN f.firstLogId = l.id THEN 1 ELSE 0 END) AS reviewCount,
+          SUM(CASE WHEN l.rating = 'again' THEN 1 ELSE 0 END) AS againCount,
+          SUM(CASE WHEN l.rating = 'hard' THEN 1 ELSE 0 END) AS hardCount,
+          SUM(CASE WHEN l.rating = 'good' THEN 1 ELSE 0 END) AS goodCount,
+          SUM(CASE WHEN l.rating = 'easy' THEN 1 ELSE 0 END) AS easyCount,
+          COUNT(*) AS completedCount,
+          IFNULL(SUM(l.durationMs), 0) AS durationMs,
+          AVG(CASE WHEN l.rating IN ('good', 'easy') THEN 1.0 ELSE 0.0 END) AS recallAccuracy,
+          AVG(CASE WHEN l.rating != 'again' THEN 1.0 ELSE 0.0 END) AS passRate,
+          CAST(0 AS INTEGER) AS estimatedMinutes
         FROM valid_review_logs l
-        WHERE l.localDay = :localDay
+        JOIN first_reviews f ON f.cardId = (l.bookCode || '|' || l.wordId)
+        WHERE l.localDay = :localDay AND l.bookCode IN (:bookCodes)
+        GROUP BY l.localDay
         """,
     )
-    fun observeDailyCompleted(localDay: String): Flow<Int>
-
-    @Query(
-        """
-        SELECT COUNT(*)
-        FROM valid_review_logs l
-        WHERE l.localDay = :localDay
-        """,
-    )
-    suspend fun dailyCompleted(localDay: String): Int
-
-    @Query(
-        """
-        SELECT IFNULL(SUM(l.durationMs), 0)
-        FROM valid_review_logs l
-        WHERE l.localDay = :localDay
-        """,
-    )
-    fun observeDailyDurationMs(localDay: String): Flow<Long>
-
-    @Query(
-        """
-        SELECT IFNULL(SUM(l.durationMs), 0)
-        FROM valid_review_logs l
-        WHERE l.localDay = :localDay
-        """,
-    )
-    suspend fun dailyDurationMs(localDay: String): Long
+    fun observeDailyStatsFromLogs(
+        localDay: String,
+        bookCodes: List<String>,
+    ): Flow<ReviewDailyStatsView?>
 
     @Query(
         """
         SELECT AVG(l.durationMs)
         FROM valid_review_logs l
-        WHERE l.localDay >= :startDay AND l.localDay <= :endDay AND l.durationMs > 0
+        WHERE l.localDay >= :startDay AND l.localDay <= :endDay AND l.durationMs > 0 AND l.bookCode IN (:bookCodes)
         """,
     )
     fun observeAverageDurationMs(
         startDay: String,
         endDay: String,
+        bookCodes: List<String>,
     ): Flow<Double?>
-
-    @Query(
-        """
-        WITH first_reviews AS (
-          SELECT cardId, MIN(reviewedAt) AS firstReviewedAt
-          FROM valid_review_logs
-          GROUP BY cardId
-        )
-        SELECT COUNT(*) FROM valid_review_logs l
-        INNER JOIN first_reviews c ON c.cardId = l.cardId
-        WHERE l.localDay = :localDay
-        AND c.firstReviewedAt = l.reviewedAt
-        """,
-    )
-    fun observeDailyNewCount(localDay: String): Flow<Int>
-
-    @Query(
-        """
-        WITH first_reviews AS (
-          SELECT cardId, MIN(reviewedAt) AS firstReviewedAt
-          FROM valid_review_logs
-          GROUP BY cardId
-        )
-        SELECT COUNT(*) FROM valid_review_logs l
-        INNER JOIN first_reviews c ON c.cardId = l.cardId
-        WHERE l.localDay = :localDay
-        AND c.firstReviewedAt = l.reviewedAt
-        """,
-    )
-    suspend fun dailyNewCount(localDay: String): Int
 
     @Query(
         """
         SELECT c.dueAt
         FROM review_cards c
         JOIN wordbook_memberships m ON m.wordId = c.wordId AND m.bookCode = c.bookCode
-        WHERE c.dueAt IS NOT NULL AND c.dueAt < :end
+        WHERE c.dueAt IS NOT NULL AND c.dueAt < :end AND m.bookCode IN (:bookCodes)
         """,
     )
-    fun observeDueCards(end: Instant): Flow<List<DueCardRow>>
+    fun observeDueCards(
+        end: Instant,
+        bookCodes: List<String>,
+    ): Flow<List<DueCardRow>>
 
     @Query(
         """
@@ -260,24 +211,28 @@ interface StatsDao {
         SELECT c.*
         FROM review_cards c
         JOIN wordbook_memberships m ON m.wordId = c.wordId AND m.bookCode = c.bookCode
-        WHERE c.lastReviewAt IS NOT NULL AND c.lastReviewAt >= :from
+        WHERE c.lastReviewAt IS NOT NULL AND c.lastReviewAt >= :from AND m.bookCode IN (:bookCodes)
         """,
     )
-    fun observeReviewedCards(from: Instant): Flow<List<ReviewCardEntity>>
+    fun observeReviewedCards(
+        from: Instant,
+        bookCodes: List<String>,
+    ): Flow<List<ReviewCardEntity>>
 
     @Query(
         """
         SELECT DISTINCT l.localDay
         FROM valid_review_logs l
+        WHERE l.bookCode IN (:bookCodes)
         """,
     )
-    fun observeActiveDays(): Flow<List<String>>
+    fun observeActiveDays(bookCodes: List<String>): Flow<List<String>>
 
     @Query(
         """
         SELECT l.localDay, COUNT(*) AS reviewCount
         FROM valid_review_logs l
-        WHERE l.localDay >= :startDay AND l.localDay <= :endDay
+        WHERE l.localDay >= :startDay AND l.localDay <= :endDay AND l.bookCode IN (:bookCodes)
         GROUP BY l.localDay
         ORDER BY l.localDay ASC
         """,
@@ -285,6 +240,7 @@ interface StatsDao {
     fun observeDailyActivityRows(
         startDay: String,
         endDay: String,
+        bookCodes: List<String>,
     ): Flow<List<DailyActivityRow>>
 
     @Query(
@@ -294,14 +250,17 @@ interface StatsDao {
           SUM(CASE WHEN rating = 'again' THEN 1 ELSE 0 END) AS againCount,
           SUM(CASE WHEN rating = 'hard' THEN 1 ELSE 0 END) AS hardCount
         FROM valid_review_logs l
-        WHERE l.reviewedAt >= :from
+        WHERE l.reviewedAt >= :from AND l.bookCode IN (:bookCodes)
         GROUP BY l.wordId
         HAVING againCount > 0 OR hardCount > 0
         ORDER BY (againCount * 3.0 + hardCount * 1.5) DESC
         LIMIT 10
         """,
     )
-    fun observeDifficultWordRows(from: Instant): Flow<List<DifficultWordRow>>
+    fun observeDifficultWordRows(
+        from: Instant,
+        bookCodes: List<String>,
+    ): Flow<List<DifficultWordRow>>
 
     @Query("SELECT * FROM word_entries WHERE id IN (:wordIds)")
     suspend fun getWordsByIds(wordIds: List<String>): List<WordEntryEntity>

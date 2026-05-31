@@ -100,6 +100,32 @@ class WordDaoSearchTest {
         }
 
     @Test
+    fun searchRanksDirectWordMatchesBeforeMeaningOnlyMatches() =
+        runTest {
+            val now = Instant.parse("2026-05-16T08:00:00Z")
+            val meaningOnly = word("meaning-match", "zeta", now, meaning = "ability in meaning")
+            val exactWord = word("exact-match", "ability", now)
+            val prefixWord = word("prefix-match", "abilityful", now)
+            val containsWord = word("contains-match", "durability", now)
+            val entries = listOf(meaningOnly, exactWord, prefixWord, containsWord)
+            database.wordDao().upsertWords(entries)
+            database.wordDao().upsertMemberships(
+                entries.mapIndexed { index, entry ->
+                    membership(entry.id, BookCode.CET4, orderIndex = index)
+                },
+            )
+
+            val result =
+                database
+                    .wordDao()
+                    .searchWords("ability", listOf(BookCode.CET4.name))
+                    .first()
+                    .map { it.word }
+
+            assertEquals(listOf("ability", "abilityful", "durability", "zeta"), result)
+        }
+
+    @Test
     fun searchCandidatesIncludeSharedWordsOnceAcrossSelectedBooks() =
         runTest {
             val now = Instant.parse("2026-05-16T08:00:00Z")
@@ -183,10 +209,11 @@ class WordDaoSearchTest {
         id: String,
         value: String,
         now: Instant,
+        meaning: String = value,
     ) = WordEntryEntity(
         id = id,
         word = value,
-        meaning = value,
+        meaning = meaning,
         phonetic = null,
         partOfSpeech = null,
         definition = null,

@@ -23,7 +23,7 @@ class NotificationPermissionTest {
     @Test
     fun reminderSyncCancelsWhenReminderIsDisabled() {
         assertTrue(
-            reminderSyncAction(reminderEnabled = false, hasNotificationPermission = true) ==
+            reminderSyncAction(reminderEnabled = false, notificationAccess = NotificationAccess.Granted) ==
                 ReminderSyncAction.Cancel,
         )
     }
@@ -31,16 +31,51 @@ class NotificationPermissionTest {
     @Test
     fun reminderSyncSchedulesWhenEnabledAndPermissionGranted() {
         assertTrue(
-            reminderSyncAction(reminderEnabled = true, hasNotificationPermission = true) ==
+            reminderSyncAction(reminderEnabled = true, notificationAccess = NotificationAccess.Granted) ==
                 ReminderSyncAction.Schedule,
         )
     }
 
     @Test
-    fun reminderSyncRequestsPermissionWhenEnabledAndPermissionMissing() {
+    fun reminderSyncCancelsWhenEnabledAndPermissionMissing() {
         assertTrue(
-            reminderSyncAction(reminderEnabled = true, hasNotificationPermission = false) ==
-                ReminderSyncAction.RequestPermission,
+            reminderSyncAction(
+                reminderEnabled = true,
+                notificationAccess = NotificationAccess.MissingRuntimePermission,
+            ) ==
+                ReminderSyncAction.Cancel,
+        )
+    }
+
+    @Test
+    fun reminderSyncCancelsWhenSystemNotificationsAreDisabled() {
+        assertTrue(
+            reminderSyncAction(
+                reminderEnabled = true,
+                notificationAccess = NotificationAccess.DisabledInSystem,
+            ) == ReminderSyncAction.Cancel,
+        )
+    }
+
+    @Test
+    fun resolveNotificationAccessRequestsRuntimePermissionBeforeTreatingAppAsDisabled() {
+        assertTrue(
+            resolveNotificationAccess(
+                sdkInt = 33,
+                hasRuntimePermission = false,
+                notificationsEnabled = false,
+            ) == NotificationAccess.MissingRuntimePermission,
+        )
+    }
+
+    @Test
+    fun resolveNotificationAccessTreatsDisabledSystemNotificationsAsUnavailableAfterPermissionGranted() {
+        assertTrue(
+            resolveNotificationAccess(
+                sdkInt = 33,
+                hasRuntimePermission = true,
+                notificationsEnabled = false,
+            ) == NotificationAccess.DisabledInSystem,
         )
     }
 }

@@ -928,6 +928,8 @@ Compose 规则：
 - `exportedAt`
 - `appVersion`
 - `databaseVersion`
+- `checksumAlgorithm`
+- `checksumScope`
 - `vocabularyManifest`
 - `latestImportRun`
 - `algorithm`
@@ -936,10 +938,13 @@ Compose 规则：
 - `reviewCards`
 - `reviewLogs`
 - `dailyStats`
+- `checksum`
 
 `dataIntegrity` 用于随导出文件携带学习数据诊断摘要，至少包含 `status`、`cardsWithLogs`、`missingCacheCount`、`inconsistentCacheCount`、`legacyLogCardCount`、`orphanLogCount`、`repairableIssueCount`、`manualReviewIssueCount`、`issueCount`。诊断失败时不阻断导出，`status` 写为 `unavailable` 并携带错误原因。
 
 `vocabularyManifest` 和 `latestImportRun.bookCounts` 属于词库版本诊断信息。合法 JSON 导出为结构化对象；如果本地缓存异常导致无法解析，则保留原始字符串，不能因此阻断用户导出复习数据。
+
+`checksum` 使用 `checksumAlgorithm` 指定的算法，校验范围由 `checksumScope` 指定；当前为排除 `checksum` 字段后的导出 payload JSON。
 
 第一版导出不加密。文件名：
 

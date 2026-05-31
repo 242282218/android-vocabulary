@@ -49,6 +49,7 @@ import org.junit.Test
 import java.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass")
 class SettingsViewModelTest {
     @After
     fun tearDown() {
@@ -739,8 +740,8 @@ class SettingsViewModelTest {
         exportRepository: ExportRepository = FakeExportRepository(),
         vocabularyRepository: VocabularyRepository = FakeVocabularyRepository(),
         settingsRepository: FakeSettingsRepository = FakeSettingsRepository(),
-    ): SettingsViewModel {
-        return SettingsViewModel(
+    ): SettingsViewModel =
+        SettingsViewModel(
             observeSettingsUseCase = ObserveSettingsUseCase(settingsRepository),
             vocabularyRepository = vocabularyRepository,
             updateSettingsUseCase = UpdateSettingsUseCase(settingsRepository),
@@ -748,7 +749,6 @@ class SettingsViewModelTest {
             inspectReviewDataIntegrityUseCase = InspectReviewDataIntegrityUseCase(reviewRepository),
             repairReviewDataCacheUseCase = RepairReviewDataCacheUseCase(reviewRepository),
         )
-    }
 }
 
 private class MaintenanceReviewRepository(

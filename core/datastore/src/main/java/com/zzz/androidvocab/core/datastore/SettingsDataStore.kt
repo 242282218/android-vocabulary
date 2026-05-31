@@ -38,7 +38,7 @@ class DataStoreSettingsRepository internal constructor(
             AppSettings(
                 dailyNewLimit = (prefs[Keys.dailyNewLimit] ?: 20).coerceIn(0, 100),
                 selectedBooks = prefs[Keys.selectedBooks].orEmpty().toBookCodes(),
-                targetRetention = (prefs[Keys.targetRetention] ?: 0.9).coerceIn(0.7, 0.98),
+                targetRetention = (prefs[Keys.targetRetention] ?: 0.9).normalizeTargetRetention(),
                 reminderEnabled = prefs[Keys.reminderEnabled] ?: false,
                 reminderHour = (prefs[Keys.reminderHour] ?: 20).coerceIn(0, 23),
                 reminderMinute = (prefs[Keys.reminderMinute] ?: 0).coerceIn(0, 59),
@@ -51,19 +51,20 @@ class DataStoreSettingsRepository internal constructor(
     }
 
     override suspend fun updateSelectedBooks(bookCodes: Set<BookCode>) {
-        dataStore.edit { it[Keys.selectedBooks] = bookCodes.joinToString(",") { book -> book.name } }
+        val safeBookCodes = bookCodes.ifEmpty { setOf(BookCode.CET4) }
+        dataStore.edit { it[Keys.selectedBooks] = safeBookCodes.toPreferenceValue() }
     }
 
     override suspend fun toggleBook(bookCode: BookCode) {
         dataStore.edit { prefs ->
             val current = prefs[Keys.selectedBooks].orEmpty().toBookCodes()
             val next = if (bookCode in current && current.size > 1) current - bookCode else current + bookCode
-            prefs[Keys.selectedBooks] = next.joinToString(",") { it.name }
+            prefs[Keys.selectedBooks] = next.toPreferenceValue()
         }
     }
 
     override suspend fun updateTargetRetention(value: Double) {
-        dataStore.edit { it[Keys.targetRetention] = value.coerceIn(0.7, 0.98) }
+        dataStore.edit { it[Keys.targetRetention] = value.normalizeTargetRetention() }
     }
 
     override suspend fun updateReminder(
@@ -99,13 +100,18 @@ class DataStoreSettingsRepository internal constructor(
     }
 
     private fun String.toBookCodes(): Set<BookCode> {
-        val parsed = split(",").mapNotNull { raw -> runCatching { BookCode.valueOf(raw) }.getOrNull() }.toSet()
+        val parsed = split(",").mapNotNull { raw -> runCatching { BookCode.valueOf(raw.trim()) }.getOrNull() }.toSet()
         return parsed.ifEmpty { setOf(BookCode.CET4) }
     }
+
+    private fun Set<BookCode>.toPreferenceValue(): String = joinToString(",") { it.name }
+
+    private fun Double.normalizeTargetRetention(): Double =
+        if (isNaN()) DEFAULT_TARGET_RETENTION else coerceIn(MIN_TARGET_RETENTION, MAX_TARGET_RETENTION)
 }
 
 internal fun String?.toThemeMode(): ThemeMode =
-    this?.let { raw -> runCatching { ThemeMode.valueOf(raw) }.getOrNull() } ?: ThemeMode.System
+    this?.let { raw -> runCatching { ThemeMode.valueOf(raw.trim()) }.getOrNull() } ?: ThemeMode.System
 
 private object Keys {
     val dailyNewLimit = intPreferencesKey("daily_new_limit")
@@ -116,6 +122,10 @@ private object Keys {
     val reminderMinute = intPreferencesKey("reminder_minute")
     val themeMode = stringPreferencesKey("theme_mode")
 }
+
+private const val DEFAULT_TARGET_RETENTION = 0.9
+private const val MIN_TARGET_RETENTION = 0.7
+private const val MAX_TARGET_RETENTION = 0.98
 
 @Module
 @InstallIn(SingletonComponent::class)

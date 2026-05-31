@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 
 internal const val POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK = 33
@@ -13,25 +14,48 @@ internal fun shouldRequestPostNotificationsPermission(
     isGranted: Boolean,
 ): Boolean = sdkInt >= POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK && !isGranted
 
+internal enum class NotificationAccess {
+    Granted,
+    MissingRuntimePermission,
+    DisabledInSystem,
+}
+
 internal enum class ReminderSyncAction {
     Schedule,
-    RequestPermission,
     Cancel,
 }
 
+internal fun resolveNotificationAccess(
+    sdkInt: Int,
+    hasRuntimePermission: Boolean,
+    notificationsEnabled: Boolean,
+): NotificationAccess =
+    when {
+        shouldRequestPostNotificationsPermission(sdkInt, hasRuntimePermission) ->
+            NotificationAccess.MissingRuntimePermission
+        !notificationsEnabled -> NotificationAccess.DisabledInSystem
+        else -> NotificationAccess.Granted
+    }
+
 internal fun reminderSyncAction(
     reminderEnabled: Boolean,
-    hasNotificationPermission: Boolean,
+    notificationAccess: NotificationAccess,
 ): ReminderSyncAction =
     when {
         !reminderEnabled -> ReminderSyncAction.Cancel
-        hasNotificationPermission -> ReminderSyncAction.Schedule
-        else -> ReminderSyncAction.RequestPermission
+        notificationAccess == NotificationAccess.MissingRuntimePermission -> ReminderSyncAction.Cancel
+        notificationAccess == NotificationAccess.DisabledInSystem -> ReminderSyncAction.Cancel
+        else -> ReminderSyncAction.Schedule
     }
 
-internal fun hasPostNotificationsPermission(context: Context): Boolean {
-    val isGranted =
+internal fun readNotificationAccess(context: Context): NotificationAccess {
+    val hasRuntimePermission =
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
-    return !shouldRequestPostNotificationsPermission(Build.VERSION.SDK_INT, isGranted)
+    val notificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+    return resolveNotificationAccess(
+        sdkInt = Build.VERSION.SDK_INT,
+        hasRuntimePermission = hasRuntimePermission,
+        notificationsEnabled = notificationsEnabled,
+    )
 }

@@ -47,6 +47,8 @@ Set-Content `
         "workflow=$workflow",
         'conclusion=success',
         "commitSha=$commitSha",
+        "serverUrl=$serverUrl",
+        "repository=$repository",
         "runId=$runId",
         "runAttempt=$runAttempt",
         "runUrl=$serverUrl/$repository/actions/runs/$runId",

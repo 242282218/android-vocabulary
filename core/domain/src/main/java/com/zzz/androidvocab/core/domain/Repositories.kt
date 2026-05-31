@@ -66,11 +66,13 @@ interface StatsRepository {
     fun observeTodayStats(
         localDay: LocalDate,
         now: Instant,
+        selectedBooks: Set<BookCode>,
     ): Flow<TodayStats>
 
     fun observeAverageReviewDurationMs(
         days: Int,
         today: LocalDate,
+        selectedBooks: Set<BookCode>,
     ): Flow<Long?>
 
     fun observeBookStats(now: Instant): Flow<List<BookStats>>
@@ -78,23 +80,30 @@ interface StatsRepository {
     fun observeReviewLoad(
         days: Int,
         now: Instant,
+        selectedBooks: Set<BookCode>,
     ): Flow<List<DailyReviewLoad>>
 
     fun observeDailyActivity(
         days: Int,
         today: LocalDate,
+        selectedBooks: Set<BookCode>,
     ): Flow<List<DailyActivity>>
 
     fun observeRetentionStats(
         days: Int,
         now: Instant,
+        selectedBooks: Set<BookCode>,
     ): Flow<RetentionStats>
 
-    fun observeStreakStats(today: LocalDate): Flow<StreakStats>
+    fun observeStreakStats(
+        today: LocalDate,
+        selectedBooks: Set<BookCode>,
+    ): Flow<StreakStats>
 
     fun observeDifficultWords(
         days: Int,
         now: Instant,
+        selectedBooks: Set<BookCode>,
     ): Flow<List<DifficultWord>>
 
     suspend fun rebuildDailyStatsCache(updatedAt: Instant): Int

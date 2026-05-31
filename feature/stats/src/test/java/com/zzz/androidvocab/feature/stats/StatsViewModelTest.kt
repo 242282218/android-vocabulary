@@ -7,8 +7,11 @@ import com.zzz.androidvocab.core.domain.GetDifficultWordsUseCase
 import com.zzz.androidvocab.core.domain.GetRetentionStatsUseCase
 import com.zzz.androidvocab.core.domain.GetReviewLoadUseCase
 import com.zzz.androidvocab.core.domain.GetStreakUseCase
+import com.zzz.androidvocab.core.domain.ObserveSettingsUseCase
+import com.zzz.androidvocab.core.domain.SettingsRepository
 import com.zzz.androidvocab.core.domain.StatsRepository
 import com.zzz.androidvocab.core.domain.VocabularyRepository
+import com.zzz.androidvocab.core.model.AppSettings
 import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.BookProgress
 import com.zzz.androidvocab.core.model.DailyActivity
@@ -17,6 +20,7 @@ import com.zzz.androidvocab.core.model.DifficultWord
 import com.zzz.androidvocab.core.model.RetentionStats
 import com.zzz.androidvocab.core.model.SourceInfo
 import com.zzz.androidvocab.core.model.StreakStats
+import com.zzz.androidvocab.core.model.ThemeMode
 import com.zzz.androidvocab.core.model.WordEntry
 import com.zzz.androidvocab.core.model.WordStatusFilter
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +46,19 @@ class StatsViewModelTest {
     fun tearDown() {
         Dispatchers.resetMain()
     }
+
+    @Test
+    fun initialStateIsLoadingUntilStatsArrive() =
+        runTest {
+            Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+            val viewModel = createViewModel(FakeStatsRepository(), FakeVocabRepository())
+
+            assertEquals(true, viewModel.uiState.value.isLoading)
+
+            val loaded = viewModel.uiState.first { !it.isLoading }
+
+            assertEquals(false, loaded.isLoading)
+        }
 
     @Test
     fun combinesAllUseCaseDataIntoUiState() =
@@ -73,6 +90,7 @@ class StatsViewModelTest {
             assertEquals(streak, state.streak)
             assertEquals(progress, state.progress)
             assertEquals(difficultWords, state.difficultWords)
+            assertEquals(listOf(BookCode.CET4), state.selectedBooks)
         }
 
     @Test
@@ -81,14 +99,16 @@ class StatsViewModelTest {
             Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
             val viewModel = createViewModel(FakeStatsRepository(), FakeVocabRepository())
 
-            val state = viewModel.uiState.first()
+            val state = viewModel.uiState.first { !it.isLoading }
 
+            assertEquals(false, state.isLoading)
             assertEquals(emptyList<DailyReviewLoad>(), state.load)
             assertEquals(emptyList<DailyActivity>(), state.activity)
             assertEquals(RetentionStats(0.0, 0.0, 0.0), state.retention)
             assertEquals(StreakStats(0, 0, emptySet()), state.streak)
             assertEquals(emptyList<BookProgress>(), state.progress)
             assertEquals(emptyList<DifficultWord>(), state.difficultWords)
+            assertEquals(listOf(BookCode.CET4), state.selectedBooks)
         }
 
     @Test
@@ -108,18 +128,71 @@ class StatsViewModelTest {
             assertEquals(0.9, updated.retention.averageRetrievability, 0.001)
         }
 
+    @Test
+    fun exposesSelectedBooksInUiState() =
+        runTest {
+            Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+            val settingsRepository =
+                FakeSettingsRepository(
+                    AppSettings(selectedBooks = setOf(BookCode.CET6, BookCode.TOEFL)),
+                )
+            val viewModel =
+                createViewModel(
+                    statsRepo = FakeStatsRepository(),
+                    vocabRepo = FakeVocabRepository(),
+                    settingsRepository = settingsRepository,
+                )
+
+            val state = viewModel.uiState.first { !it.isLoading }
+
+            assertEquals(listOf(BookCode.CET6, BookCode.TOEFL), state.selectedBooks)
+        }
+
+    @Test
+    fun filtersProgressToSelectedBooks() =
+        runTest {
+            Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+            val settingsRepository =
+                FakeSettingsRepository(
+                    AppSettings(selectedBooks = setOf(BookCode.TOEFL)),
+                )
+            val viewModel =
+                createViewModel(
+                    statsRepo = FakeStatsRepository(),
+                    vocabRepo =
+                        FakeVocabRepository(
+                            listOf(
+                                BookProgress(BookCode.CET4, 3846, 120, 40, 12),
+                                BookProgress(BookCode.TOEFL, 6970, 320, 90, 28),
+                            ),
+                        ),
+                    settingsRepository = settingsRepository,
+                )
+
+            val state = viewModel.uiState.first { !it.isLoading }
+
+            assertEquals(listOf(BookCode.TOEFL), state.progress.map { it.bookCode })
+        }
+
     private fun createViewModel(
         statsRepo: FakeStatsRepository,
         vocabRepo: FakeVocabRepository,
+        settingsRepository: FakeSettingsRepository = FakeSettingsRepository(),
     ): StatsViewModel {
         val clock = FixedClockProvider()
         return StatsViewModel(
-            getReviewLoadUseCase = GetReviewLoadUseCase(statsRepo, clock),
-            getDailyActivityUseCase = GetDailyActivityUseCase(statsRepo, clock),
-            getRetentionStatsUseCase = GetRetentionStatsUseCase(statsRepo, clock),
-            getStreakUseCase = GetStreakUseCase(statsRepo, clock),
-            getBookProgressUseCase = GetBookProgressUseCase(vocabRepo, clock),
-            getDifficultWordsUseCase = GetDifficultWordsUseCase(statsRepo, clock),
+            getReviewLoadUseCase =
+                GetReviewLoadUseCase(
+                    statsRepository = statsRepo,
+                    settingsRepository = settingsRepository,
+                    clockProvider = clock,
+                ),
+            getDailyActivityUseCase = GetDailyActivityUseCase(statsRepo, settingsRepository, clock),
+            getRetentionStatsUseCase = GetRetentionStatsUseCase(statsRepo, settingsRepository, clock),
+            getStreakUseCase = GetStreakUseCase(statsRepo, settingsRepository, clock),
+            getBookProgressUseCase = GetBookProgressUseCase(vocabRepo, settingsRepository, clock),
+            getDifficultWordsUseCase = GetDifficultWordsUseCase(statsRepo, settingsRepository, clock),
+            observeSettingsUseCase = ObserveSettingsUseCase(settingsRepository),
         )
     }
 }
@@ -136,6 +209,7 @@ private class FakeStatsRepository(
     override fun observeTodayStats(
         localDay: LocalDate,
         now: Instant,
+        selectedBooks: Set<BookCode>,
     ): Flow<com.zzz.androidvocab.core.model.TodayStats> =
         flowOf(
             com.zzz.androidvocab.core.model.TodayStats(
@@ -157,6 +231,7 @@ private class FakeStatsRepository(
     override fun observeAverageReviewDurationMs(
         days: Int,
         today: LocalDate,
+        selectedBooks: Set<BookCode>,
     ): Flow<Long?> = flowOf(null)
 
     override fun observeBookStats(now: Instant): Flow<List<com.zzz.androidvocab.core.model.BookStats>> =
@@ -165,26 +240,63 @@ private class FakeStatsRepository(
     override fun observeReviewLoad(
         days: Int,
         now: Instant,
+        selectedBooks: Set<BookCode>,
     ): Flow<List<DailyReviewLoad>> = flowOf(reviewLoad)
 
     override fun observeDailyActivity(
         days: Int,
         today: LocalDate,
+        selectedBooks: Set<BookCode>,
     ): Flow<List<DailyActivity>> = flowOf(activity)
 
     override fun observeRetentionStats(
         days: Int,
         now: Instant,
+        selectedBooks: Set<BookCode>,
     ): Flow<RetentionStats> = retentionFlow
 
-    override fun observeStreakStats(today: LocalDate): Flow<StreakStats> = flowOf(streak)
+    override fun observeStreakStats(
+        today: LocalDate,
+        selectedBooks: Set<BookCode>,
+    ): Flow<StreakStats> = flowOf(streak)
 
     override fun observeDifficultWords(
         days: Int,
         now: Instant,
+        selectedBooks: Set<BookCode>,
     ): Flow<List<DifficultWord>> = flowOf(difficultWords)
 
     override suspend fun rebuildDailyStatsCache(updatedAt: Instant): Int = 0
+}
+
+private class FakeSettingsRepository(
+    private val appSettings: AppSettings = AppSettings(selectedBooks = setOf(BookCode.CET4)),
+) : SettingsRepository {
+    override val settings: Flow<AppSettings> =
+        flowOf(appSettings)
+
+    override suspend fun updateDailyNewLimit(value: Int) = Unit
+
+    override suspend fun updateSelectedBooks(bookCodes: Set<BookCode>) = Unit
+
+    override suspend fun toggleBook(bookCode: BookCode) = Unit
+
+    override suspend fun updateTargetRetention(value: Double) = Unit
+
+    override suspend fun updateReminder(
+        enabled: Boolean,
+        hour: Int,
+        minute: Int,
+    ) = Unit
+
+    override suspend fun updateReminderEnabled(enabled: Boolean) = Unit
+
+    override suspend fun updateReminderTime(
+        hour: Int,
+        minute: Int,
+    ) = Unit
+
+    override suspend fun updateThemeMode(themeMode: ThemeMode) = Unit
 }
 
 private class FakeVocabRepository(

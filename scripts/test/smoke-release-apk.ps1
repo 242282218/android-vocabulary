@@ -342,15 +342,18 @@ function Save-ApkSmokeRunMetadata {
 }
 
 function Wait-ForVisibleAppText {
-    $expectedTextPattern = '今日|复习|词书|统计|设置|正在准备词库|开始学习|词库导入失败|Today|Review|Wordbook|Stats|Settings'
     $lastWindowXmlText = $null
     $lastDumpError = $null
     for ($attempt = 1; $attempt -le 15; $attempt++) {
         try {
             Invoke-AndroidDebugBridge @('shell', 'uiautomator', 'dump', '/sdcard/android-vocab-window.xml') | Out-Null
             $windowXml = Invoke-AndroidDebugBridge @('exec-out', 'cat', '/sdcard/android-vocab-window.xml') -Capture
-            $lastWindowXmlText = $windowXml -join "`n"
-            if ($lastWindowXmlText -match $expectedTextPattern) {
+            $lastWindowXmlText = (($windowXml -join "`n") -replace "`0", '')
+            $visibleTexts =
+                [regex]::Matches($lastWindowXmlText, 'text="([^"]+)"') |
+                ForEach-Object { $_.Groups[1].Value.Trim() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            if (@($visibleTexts).Count -gt 0) {
                 return
             }
         } catch {

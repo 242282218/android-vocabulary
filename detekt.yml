@@ -2,21 +2,29 @@ style:
   MagicNumber:
     active: false
   MaxLineLength:
-    active: false
+    active: true
+    maxLineLength: 120
   ReturnCount:
     active: false
   NewLineAtEndOfFile:
-    active: false
+    active: true
 
 complexity:
   LongParameterList:
     active: false
   TooManyFunctions:
-    active: false
+    active: true
+    thresholdInFiles: 25
+    thresholdInClasses: 20
+    thresholdInInterfaces: 25
+    thresholdInObjects: 20
   LongMethod:
-    active: false
+    active: true
+    threshold: 65
+    ignoreAnnotated:
+      - Test
   CyclomaticComplexMethod:
-    threshold: 18
+    threshold: 15
 
 naming:
   FunctionNaming:

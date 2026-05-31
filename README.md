@@ -70,7 +70,10 @@ GitHub Actions 执行：
 
 - `scripts/test/verify-release-scripts.ps1`
 - `scripts/test/verify-vocab-assets.ps1`
+- `./gradlew dependencyCheckAggregate`
 - `./gradlew ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest pixel2Api30DebugAndroidTest`
+
+`dependencyCheckAggregate` 需要 NVD API key；本地设置 `NVD_API_KEY` 环境变量，或传入 `-PnvdApiKey=<key>`。GitHub Actions 需要配置同名 repository secret；未设置时 Gradle 会在 dependency-check 任务开始前直接失败。
 
 有设备或模拟器时再运行：
 
@@ -98,18 +101,23 @@ GitHub Actions 执行：
 脚本默认要求 release APK 已签名并能通过 `apksigner verify`。验签通过且未使用 `-AllowUnsigned` 时，APK 会以 `AndroidVocabulary-release-v<versionName>-<versionCode>.apk` 复制到 `dist/`。没有 keystore 时可用 `-AllowUnsigned` 只验证编译链路，输出名为 `AndroidVocabulary-build-validation-v<versionName>-<versionCode>.apk`，不得对外分发。正式对外分发前必须配置 release keystore，并按 [发布构建说明](docs/release.md) 做真机冒烟验证。
 完整发布顺序见 [发布前 Checklist](docs/release.md#发布前-checklist)，其中 `-AllowUnsigned` 和 `-AllowDebugSigning` 只代表本地验证，不代表可发布。
 需要只读审计 `dist/` 中当前版本 release 命名 APK/AAB 是否真实验签时运行 `.\scripts\test\verify-release-artifacts.ps1`；失败会写入 `build/release-artifacts/release-artifacts-run.txt`，不会删除历史产物。该 metadata 会记录 release APK/AAB 的 SHA-256。
-正式发布前的最终证据链门禁是 `.\scripts\test\verify-release-readiness.ps1 -GitHubActionsEvidencePath <ci-evidence-file> -ReleaseArtifactsEvidencePath <release-artifacts-run.txt> -ApkSmokeEvidencePath <smoke-release-apk-run.txt> -DeviceVerificationEvidencePath <verification-completed.txt>`，会汇总 dist 审计、APK smoke、设备 AAB 验收和 CI 证据，并重算当前 `dist/` release 产物 SHA-256 与审计记录比对；APK smoke metadata 中的 `apkSha256` 必须和 release APK 一致，设备 AAB 验收 metadata 中的 `bundleSha256`、父日志摘要里的 `bundleSmokeBundleSha256` 以及归档 bundle smoke 子日志原文里的 `bundleSha256` 都必须和 release AAB 一致。未传 `-ReleaseArtifactsEvidencePath` / `-ApkSmokeEvidencePath` 时会沿用默认 metadata；未传 `-DeviceVerificationEvidencePath` 时会从设备验收完成记录中选择最新且匹配当前版本和 release AAB SHA-256 的记录。正式发布建议显式传入本次保留的三个本地 evidence 文件；readiness 会把本次读取到的 evidence 复制到 `build/release-readiness/evidence-*.txt` 并记录归档文件 SHA-256，包括设备验收父日志及其指向的 bundle smoke 子日志，同时在 `evidenceArchives` 中汇总归档清单。
+`-AllowUnsigned` 只写入 build-validation 产物，不会覆盖同版本 `AndroidVocabulary-release-v<versionName>-<versionCode>` APK/AAB；如果 `dist/` 中已有旧的 release 命名文件，审计和 readiness 仍会检查它并失败。正式发布前用不带 `-AllowUnsigned` 的签名构建替换，或确认它只是历史证据后人工移出/归档到 `dist/` 外。
+正式发布前的最终证据链门禁是 `.\scripts\test\verify-release-readiness.ps1 -GitHubActionsEvidencePath <ci-evidence-file> -ReleaseArtifactsEvidencePath <release-artifacts-run.txt> -ApkSmokeEvidencePath <smoke-release-apk-run.txt> -DeviceVerificationEvidencePath <verification-completed.txt>`，会汇总 dist 审计、APK smoke、设备 AAB 验收和 CI 证据，并要求当前 Git worktree 干净，避免本地 release 产物来自未经 CI 验证的源码状态；同时会重算当前 `dist/` release 产物 SHA-256 与审计记录比对。APK smoke metadata 中的 `apkSha256` 必须和 release APK 一致，设备 AAB 验收 metadata 中的 `bundleSha256`、父日志摘要里的 `bundleSmokeBundleSha256` 以及归档 bundle smoke 子日志原文里的 `bundleSha256` 都必须和 release AAB 一致。未传 `-ReleaseArtifactsEvidencePath` / `-ApkSmokeEvidencePath` 时会沿用默认 metadata；未传 `-DeviceVerificationEvidencePath` 时会从设备验收完成记录中选择最新且匹配当前版本和 release AAB SHA-256 的记录。正式发布建议显式传入本次保留的三个本地 evidence 文件；readiness 会把本次读取到的 evidence 复制到 `build/release-readiness/evidence-*.txt` 并记录归档文件 SHA-256，包括设备验收父日志及其指向的 bundle smoke 子日志，同时在 `evidenceArchives` 中汇总归档清单。失败时 metadata 会按 requirement 写入 `*Remediation` 字段，指出下一步修复动作。
 GitHub Actions 成功后会上传 `github-actions-release-evidence` artifact；其中 `github-actions-evidence.txt` 使用每行 `key=value`，示例：
 
 ```text
 workflow=Android
 conclusion=success
 commitSha=<git rev-parse HEAD>
+serverUrl=https://github.com
+repository=<owner>/<repo>
 runId=<github run id>
 runAttempt=<github run attempt>
 runUrl=https://github.com/<owner>/<repo>/actions/runs/<github run id>
-checks=verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest
+checks=verify-release-scripts, verify-vocab-assets, dependencyCheckAggregate, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest
 ```
+
+`verify-release-readiness.ps1` 会同时校验 `serverUrl`、`repository`、`runId` 和 `runUrl` 是否一致，并要求 `serverUrl=https://github.com`，避免误用其他仓库或其他 GitHub 实例的 workflow 结果。
 
 需要生成 Google Play 使用的 Android App Bundle：
 

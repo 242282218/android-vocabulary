@@ -85,6 +85,8 @@ data class SubmitFeedbackCommand(
     val cardId: String,
     val rating: ReviewRating,
     val reviewedAt: Instant,
+    val expectedLastReviewAt: Instant? = null,
+    val expectedReviewCount: Int? = null,
     val durationMs: Long,
     val targetRetention: Double,
 )
@@ -101,14 +103,22 @@ data class ReviewDataIntegrityReport(
     val inconsistentCacheCount: Int,
     val legacyLogCardCount: Int,
     val orphanLogCount: Int = 0,
-    val repairableIssueCount: Int = missingCacheCount + inconsistentCacheCount,
+    val malformedLogCardCount: Int = 0,
+    val dailyStatsDays: Int = 0,
+    val missingDailyStatsCount: Int = 0,
+    val inconsistentDailyStatsCount: Int = 0,
+    val timelineConflictCardCount: Int = 0,
+    val repairableIssueCount: Int =
+        missingCacheCount + inconsistentCacheCount + missingDailyStatsCount + inconsistentDailyStatsCount,
 ) {
-    val manualReviewIssueCount: Int = legacyLogCardCount + orphanLogCount
-    val issueCount: Int = missingCacheCount + inconsistentCacheCount + legacyLogCardCount + orphanLogCount
+    val manualReviewIssueCount: Int =
+        legacyLogCardCount + orphanLogCount + malformedLogCardCount + timelineConflictCardCount
+    val issueCount: Int = repairableIssueCount + manualReviewIssueCount
 }
 
 data class ReviewDataRepairResult(
     val before: ReviewDataIntegrityReport,
     val after: ReviewDataIntegrityReport,
     val repairedCount: Int,
+    val timelineConflictCacheRebuiltCount: Int = 0,
 )

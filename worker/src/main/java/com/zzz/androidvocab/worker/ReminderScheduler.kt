@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.zzz.androidvocab.core.common.ClockProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Duration
 import java.time.LocalDateTime
@@ -19,14 +20,16 @@ class ReminderScheduler
     @Inject
     constructor(
         @ApplicationContext private val context: Context,
+        private val clockProvider: ClockProvider,
     ) {
         fun scheduleDailyReminder(
             hour: Int,
             minute: Int,
         ) {
+            val now = LocalDateTime.ofInstant(clockProvider.now(), clockProvider.zoneId())
             val request =
                 PeriodicWorkRequestBuilder<DailyReminderWorker>(1, TimeUnit.DAYS)
-                    .setInitialDelay(nextDailyReminderDelay(LocalDateTime.now(), hour, minute))
+                    .setInitialDelay(nextDailyReminderDelay(now, hour, minute))
                     .build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 DAILY_REVIEW_REMINDER_WORK,
@@ -48,7 +51,7 @@ internal fun nextDailyReminderDelay(
     val reminderTime = LocalTime.of(hour.coerceIn(0, 23), minute.coerceIn(0, 59))
     val nextReminder =
         now.toLocalDate().atTime(reminderTime).let { today ->
-            if (today.isAfter(now)) today else today.plusDays(1)
+            if (today.isBefore(now)) today.plusDays(1) else today
         }
     return Duration.between(now, nextReminder)
 }

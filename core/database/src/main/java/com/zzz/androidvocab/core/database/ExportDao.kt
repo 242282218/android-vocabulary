@@ -24,7 +24,7 @@ interface ExportDao {
         """
         SELECT l.*
         FROM valid_review_logs l
-        ORDER BY l.reviewedAt ASC
+        ORDER BY l.reviewedAt ASC, l.id ASC
         """,
     )
     suspend fun reviewLogs(): List<ReviewLogEntity>
@@ -32,29 +32,8 @@ interface ExportDao {
     @Query("SELECT * FROM daily_stats ORDER BY localDay ASC")
     suspend fun dailyStats(): List<DailyStatsEntity>
 
-    @Query(
-        """
-        WITH first_reviews AS (
-          SELECT cardId, MIN(reviewedAt) AS firstReviewedAt
-          FROM valid_review_logs
-          GROUP BY cardId
-        )
-        SELECT
-          l.localDay AS localDay,
-          SUM(CASE WHEN f.firstReviewedAt = l.reviewedAt THEN 1 ELSE 0 END) AS newCount,
-          SUM(CASE WHEN l.rating = 'again' THEN 1 ELSE 0 END) AS againCount,
-          SUM(CASE WHEN l.rating = 'hard' THEN 1 ELSE 0 END) AS hardCount,
-          SUM(CASE WHEN l.rating = 'good' THEN 1 ELSE 0 END) AS goodCount,
-          SUM(CASE WHEN l.rating = 'easy' THEN 1 ELSE 0 END) AS easyCount,
-          COUNT(*) AS completedCount,
-          IFNULL(SUM(l.durationMs), 0) AS durationMs
-        FROM valid_review_logs l
-        JOIN first_reviews f ON f.cardId = l.cardId
-        GROUP BY l.localDay
-        ORDER BY l.localDay ASC
-        """,
-    )
-    suspend fun dailyStatsFromLogs(): List<ExportDailyStatsRow>
+    @Query("SELECT * FROM review_daily_stats ORDER BY localDay ASC")
+    suspend fun dailyStatsFromLogs(): List<ReviewDailyStatsView>
 
     @Query("SELECT * FROM app_settings_snapshot WHERE id = 'current'")
     suspend fun settingsSnapshot(): AppSettingsSnapshotEntity?

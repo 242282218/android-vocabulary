@@ -109,6 +109,48 @@ function Get-ReleaseArtifactSha256 {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-ReleaseArtifactLastWriteTimeValue {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return '<missing>'
+    }
+    return (Get-Item -LiteralPath $Path).LastWriteTime.ToString('o')
+}
+
+function Test-ReleaseArtifactOlderThan {
+    param(
+        [string]$Path,
+        [string]$ReferencePath
+    )
+
+    if (-not (Test-Path -LiteralPath $Path) -or -not (Test-Path -LiteralPath $ReferencePath)) {
+        return '<unknown>'
+    }
+
+    return (((Get-Item -LiteralPath $Path).LastWriteTimeUtc -lt (Get-Item -LiteralPath $ReferencePath).LastWriteTimeUtc).ToString())
+}
+
+function Get-ReleaseArtifactRemediationText {
+    param([string[]]$StaleCurrentVersionArtifacts)
+
+    $base = (
+        'Configure release signing, run scripts/release/build-release.ps1 and ' +
+        'scripts/release/build-bundle.ps1 without -AllowUnsigned, then rerun this audit. ' +
+        'If stale release-named dist artifacts are intentional evidence, archive them outside dist before final audit. ' +
+        'Build-validation artifacts are local-only and not publishable.'
+    )
+
+    if ($null -eq $StaleCurrentVersionArtifacts -or $StaleCurrentVersionArtifacts.Count -eq 0) {
+        return $base
+    }
+
+    return (
+        "$base Current-version release-named artifacts are older than the matching build-validation outputs: " +
+        "$($StaleCurrentVersionArtifacts -join ', '). Replace them with a signed release build or archive them outside dist."
+    )
+}
+
 Use-AndroidVocabularyJavaHome
 New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
@@ -120,6 +162,8 @@ $buildValidationApkName = Get-AndroidVocabularyBuildValidationApkName
 $buildValidationBundleName = Get-AndroidVocabularyBuildValidationBundleName
 $releaseApkPath = Join-Path $distDir $releaseApkName
 $releaseBundlePath = Join-Path $distDir $releaseBundleName
+$buildValidationApkPath = Join-Path $distDir $buildValidationApkName
+$buildValidationBundlePath = Join-Path $distDir $buildValidationBundleName
 
 $apkStatus = Get-ReleaseArtifactStatusText `
     -Path $releaseApkPath `
@@ -129,6 +173,14 @@ $bundleStatus = Get-ReleaseArtifactStatusText `
     -CheckSignature { param($path) Invoke-ReleaseArtifactAabSignatureCheck $path }
 $releaseApkSha256 = Get-ReleaseArtifactSha256 $releaseApkPath
 $releaseBundleSha256 = Get-ReleaseArtifactSha256 $releaseBundlePath
+$buildValidationApkSha256 = Get-ReleaseArtifactSha256 $buildValidationApkPath
+$buildValidationBundleSha256 = Get-ReleaseArtifactSha256 $buildValidationBundlePath
+$releaseApkLastWriteTime = Get-ReleaseArtifactLastWriteTimeValue $releaseApkPath
+$releaseBundleLastWriteTime = Get-ReleaseArtifactLastWriteTimeValue $releaseBundlePath
+$buildValidationApkLastWriteTime = Get-ReleaseArtifactLastWriteTimeValue $buildValidationApkPath
+$buildValidationBundleLastWriteTime = Get-ReleaseArtifactLastWriteTimeValue $buildValidationBundlePath
+$releaseApkOlderThanBuildValidation = Test-ReleaseArtifactOlderThan -Path $releaseApkPath -ReferencePath $buildValidationApkPath
+$releaseBundleOlderThanBuildValidation = Test-ReleaseArtifactOlderThan -Path $releaseBundlePath -ReferencePath $buildValidationBundlePath
 
 $allDistApks = Get-ReleaseArtifactNames '*.apk'
 $allDistBundles = Get-ReleaseArtifactNames '*.aab'
@@ -138,6 +190,14 @@ $legacyDistArtifacts = @(
     $allDistApks |
         Where-Object { $_ -like 'AndroidVocabulary-release-v*.apk' -and $_ -ne $releaseApkName }
 ) | Sort-Object -Unique
+$staleCurrentVersionArtifacts = @()
+if ($releaseApkOlderThanBuildValidation -eq 'True') {
+    $staleCurrentVersionArtifacts += $releaseApkName
+}
+if ($releaseBundleOlderThanBuildValidation -eq 'True') {
+    $staleCurrentVersionArtifacts += $releaseBundleName
+}
+$staleCurrentVersionArtifacts = @($staleCurrentVersionArtifacts | Sort-Object -Unique)
 
 $metadata = @(
     "runStatus=started",
@@ -147,13 +207,22 @@ $metadata = @(
     "releaseApk=$releaseApkPath",
     "releaseApkStatus=$($apkStatus.Status)",
     "releaseApkSha256=$releaseApkSha256",
+    "releaseApkLastWriteTime=$releaseApkLastWriteTime",
+    "releaseApkOlderThanBuildValidation=$releaseApkOlderThanBuildValidation",
     "releaseBundle=$releaseBundlePath",
     "releaseBundleStatus=$($bundleStatus.Status)",
     "releaseBundleSha256=$releaseBundleSha256",
-    "buildValidationApk=$(Join-Path $distDir $buildValidationApkName)",
-    "buildValidationApkExists=$(Test-Path -LiteralPath (Join-Path $distDir $buildValidationApkName))",
-    "buildValidationBundle=$(Join-Path $distDir $buildValidationBundleName)",
-    "buildValidationBundleExists=$(Test-Path -LiteralPath (Join-Path $distDir $buildValidationBundleName))",
+    "releaseBundleLastWriteTime=$releaseBundleLastWriteTime",
+    "releaseBundleOlderThanBuildValidation=$releaseBundleOlderThanBuildValidation",
+    "buildValidationApk=$buildValidationApkPath",
+    "buildValidationApkExists=$(Test-Path -LiteralPath $buildValidationApkPath)",
+    "buildValidationApkSha256=$buildValidationApkSha256",
+    "buildValidationApkLastWriteTime=$buildValidationApkLastWriteTime",
+    "buildValidationBundle=$buildValidationBundlePath",
+    "buildValidationBundleExists=$(Test-Path -LiteralPath $buildValidationBundlePath)",
+    "buildValidationBundleSha256=$buildValidationBundleSha256",
+    "buildValidationBundleLastWriteTime=$buildValidationBundleLastWriteTime",
+    "staleCurrentVersionArtifacts=$(if ($staleCurrentVersionArtifacts.Count -eq 0) { '<none>' } else { $staleCurrentVersionArtifacts -join ', ' })",
     "legacyDistArtifacts=$(if ($legacyDistArtifacts.Count -eq 0) { '<none>' } else { $legacyDistArtifacts -join ', ' })",
     "allDistApks=$(if ($allDistApks.Count -eq 0) { '<none>' } else { $allDistApks -join ', ' })",
     "allDistBundles=$(if ($allDistBundles.Count -eq 0) { '<none>' } else { $allDistBundles -join ', ' })"
@@ -179,6 +248,9 @@ if ($bundleStatus.Status -eq 'missing') {
 if ($legacyDistArtifacts.Count -gt 0) {
     Write-Warning "Legacy or non-current release-named dist artifacts were left untouched: $($legacyDistArtifacts -join ', ')"
 }
+if ($staleCurrentVersionArtifacts.Count -gt 0) {
+    Write-Warning "Current-version release-named artifacts appear stale relative to build-validation outputs: $($staleCurrentVersionArtifacts -join ', ')"
+}
 
 if ($apkStatus.Status -ne 'verified') {
     $metadata += "releaseApkSignatureOutput=$($apkStatus.SignatureOutput.Replace("`r`n", ' ').Replace("`n", ' ').Replace("`r", ' '))"
@@ -188,8 +260,11 @@ if ($bundleStatus.Status -ne 'verified') {
 }
 
 if ($failures.Count -gt 0) {
+    $remediation = Get-ReleaseArtifactRemediationText -StaleCurrentVersionArtifacts $staleCurrentVersionArtifacts
+    Write-Warning $remediation
     $metadata[0] = 'runStatus=failed'
     $metadata += "failureMessage=$($failures -join '; ')"
+    $metadata += "releaseArtifactsRemediation=$remediation"
     Set-Content -LiteralPath $metadataPath -Value $metadata
     throw "Release artifact verification failed. See $metadataPath. Failures: $($failures -join '; ')"
 }

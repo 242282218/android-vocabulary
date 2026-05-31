@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -27,6 +28,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,7 +64,6 @@ fun ReviewRoute(viewModel: ReviewViewModel = hiltViewModel()) {
     )
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ReviewScreen(
     uiState: ReviewUiState,
@@ -69,17 +72,29 @@ fun ReviewScreen(
     onSubmit: (ReviewRating) -> Unit,
 ) {
     VocabScreen {
-        VocabPageHeader(
-            title = "复习",
-            subtitle = if (uiState.remainingCount > 0) "先回想，再看答案。剩余 ${uiState.remainingCount} 个" else "今天已完成",
-            trailing = {
-                VocabPill(
-                    text = "${uiState.remainingCount}",
-                    color = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.primary,
+        ReviewHeader(uiState)
+        if (uiState.isLoading) {
+            VocabCard {
+                VocabEmptyState(
+                    title = "正在加载队列",
+                    body = "正在读取本地复习状态，稍后会显示下一张卡片。",
                 )
-            },
-        )
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+            }
+            return@VocabScreen
+        }
+        if (uiState.isAdvancingToNextCard) {
+            VocabCard(
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            ) {
+                VocabEmptyState(
+                    title = "正在准备下一张",
+                    body = "学习记录已经保存，正在刷新本地队列。",
+                )
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+            }
+            return@VocabScreen
+        }
         val item = uiState.item
         if (item == null) {
             VocabCard {
@@ -97,49 +112,15 @@ fun ReviewScreen(
             onSpeak = onSpeak,
         )
         if (uiState.isBackVisible) {
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                maxItemsInEachRow = 2,
-            ) {
-                FeedbackButton(
-                    label = "忘了",
-                    description = "重新来",
-                    rating = ReviewRating.Again,
-                    isSubmitting = uiState.isSubmitting,
-                    onSubmit = onSubmit,
-                    modifier = Modifier.weight(1f),
-                )
-                FeedbackButton(
-                    label = "模糊",
-                    description = "有点卡",
-                    rating = ReviewRating.Hard,
-                    isSubmitting = uiState.isSubmitting,
-                    onSubmit = onSubmit,
-                    modifier = Modifier.weight(1f),
-                )
-                FeedbackButton(
-                    label = "记得",
-                    description = "正常想起",
-                    rating = ReviewRating.Good,
-                    isSubmitting = uiState.isSubmitting,
-                    onSubmit = onSubmit,
-                    modifier = Modifier.weight(1f),
-                )
-                FeedbackButton(
-                    label = "熟悉",
-                    description = "太简单",
-                    rating = ReviewRating.Easy,
-                    isSubmitting = uiState.isSubmitting,
-                    onSubmit = onSubmit,
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            FeedbackButtons(
+                isSubmitting = uiState.isSubmitting,
+                onSubmit = onSubmit,
+            )
         }
         uiState.errorMessage?.let {
             val isDark = isSystemInDarkTheme()
             VocabCard(
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
                 elevated = false,
                 containerColor = if (isDark) VocabColors.ErrorCardBackgroundDark else VocabColors.ErrorCardBackground,
                 borderColor = MaterialTheme.colorScheme.error.copy(alpha = 0.24f),
@@ -148,6 +129,79 @@ fun ReviewScreen(
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
         }
+    }
+}
+
+@Composable
+private fun ReviewHeader(uiState: ReviewUiState) {
+    VocabPageHeader(
+        title = "复习",
+        subtitle =
+            when {
+                uiState.isLoading -> "正在读取今日队列"
+                uiState.isAdvancingToNextCard -> "学习记录已保存，正在准备下一张"
+                uiState.remainingCount > 0 -> "先回想，再看答案。剩余 ${uiState.remainingCount} 个"
+                else -> "今天已完成"
+            },
+        trailing =
+            if (uiState.isLoading) {
+                null
+            } else {
+                {
+                    VocabPill(
+                        text = "${uiState.remainingCount}",
+                        color = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            },
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FeedbackButtons(
+    isSubmitting: Boolean,
+    onSubmit: (ReviewRating) -> Unit,
+) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        maxItemsInEachRow = 2,
+    ) {
+        FeedbackButton(
+            label = "忘了",
+            description = "重新来",
+            rating = ReviewRating.Again,
+            isSubmitting = isSubmitting,
+            onSubmit = onSubmit,
+            modifier = Modifier.weight(1f),
+        )
+        FeedbackButton(
+            label = "模糊",
+            description = "有点卡",
+            rating = ReviewRating.Hard,
+            isSubmitting = isSubmitting,
+            onSubmit = onSubmit,
+            modifier = Modifier.weight(1f),
+        )
+        FeedbackButton(
+            label = "记得",
+            description = "正常想起",
+            rating = ReviewRating.Good,
+            isSubmitting = isSubmitting,
+            onSubmit = onSubmit,
+            modifier = Modifier.weight(1f),
+        )
+        FeedbackButton(
+            label = "熟悉",
+            description = "太简单",
+            rating = ReviewRating.Easy,
+            isSubmitting = isSubmitting,
+            onSubmit = onSubmit,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

@@ -1,6 +1,8 @@
 package com.zzz.androidvocab.core.stats
 
 import com.zzz.androidvocab.core.common.ClockProvider
+import com.zzz.androidvocab.core.common.estimateCompletedMinutes
+import com.zzz.androidvocab.core.common.localLookbackStart
 import com.zzz.androidvocab.core.database.StatsDao
 import com.zzz.androidvocab.core.database.toModel
 import com.zzz.androidvocab.core.domain.SettingsRepository
@@ -14,6 +16,7 @@ import com.zzz.androidvocab.core.model.DifficultWord
 import com.zzz.androidvocab.core.model.RetentionStats
 import com.zzz.androidvocab.core.model.StreakStats
 import com.zzz.androidvocab.core.model.TodayStats
+import com.zzz.androidvocab.core.model.toBookCodeOrNull
 import com.zzz.androidvocab.core.scheduler.ReviewScheduler
 import dagger.Binds
 import dagger.Module
@@ -23,6 +26,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import java.time.Instant
 import java.time.LocalDate
@@ -42,82 +46,80 @@ class OfflineStatsRepository
         override fun observeTodayStats(
             localDay: LocalDate,
             now: Instant,
+            selectedBooks: Set<BookCode>,
         ): Flow<TodayStats> {
+            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
             val baseFlow =
-                combine(
-                    statsDao.observeDailyRatingCounts(localDay.toString()),
-                    statsDao.observeDailyCompleted(localDay.toString()),
-                    statsDao.observeDailyNewCount(localDay.toString()),
-                    statsDao.observeDailyDurationMs(localDay.toString()),
-                ) { ratings, completed, newCount, durationMs ->
-                    val counts = ratings.associate { it.rating to it.count }
+                statsDao.observeDailyStatsFromLogs(localDay.toString(), bookCodes).map { stats ->
                     TodayStatsBase(
-                        againCount = counts["again"] ?: 0,
-                        hardCount = counts["hard"] ?: 0,
-                        goodCount = counts["good"] ?: 0,
-                        easyCount = counts["easy"] ?: 0,
-                        completedCount = completed.coerceAtLeast(0),
-                        newCount = newCount,
-                        durationMs = durationMs,
+                        againCount = stats?.againCount ?: 0,
+                        hardCount = stats?.hardCount ?: 0,
+                        goodCount = stats?.goodCount ?: 0,
+                        easyCount = stats?.easyCount ?: 0,
+                        completedCount = stats?.completedCount ?: 0,
+                        newCount = stats?.newCount ?: 0,
+                        reviewCount = stats?.reviewCount ?: 0,
+                        durationMs = stats?.durationMs ?: 0L,
+                        recallAccuracy = stats?.recallAccuracy ?: 0.0,
+                        passRate = stats?.passRate ?: 0.0,
                     )
                 }
             val dueCountAndSettingsFlow =
                 settingsRepository.settings.flatMapLatest { settings ->
-                    val bookCodes =
-                        settings.selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
                     statsDao.observeDueCount(now, bookCodes).map { dueCount ->
                         dueCount to settings
                     }
                 }
             return combine(baseFlow, dueCountAndSettingsFlow) { base, (dueCount, settings) ->
-                val remainingNew = (settings.dailyNewLimit - base.newCount).coerceAtLeast(0)
-                val remainingCount = dueCount + remainingNew
-                val avgMs =
-                    if (base.completedCount > 0) {
-                        base.durationMs / base.completedCount
-                    } else {
-                        DEFAULT_REVIEW_DURATION_MS
-                    }
-                val estimatedMinutes =
-                    ((remainingCount.toLong() * avgMs + 59999L) / 60000L).toInt()
-                val recallAccuracy =
-                    if (base.completedCount == 0) {
-                        0.0
-                    } else {
-                        (base.goodCount + base.easyCount).toDouble() / base.completedCount
-                    }
-                val passRate =
-                    if (base.completedCount == 0) {
-                        0.0
-                    } else {
-                        (base.hardCount + base.goodCount + base.easyCount).toDouble() /
-                            base.completedCount
-                    }
-                TodayStats(
-                    localDay = localDay.toString(),
-                    newCount = base.newCount,
-                    reviewCount = (base.completedCount - base.newCount).coerceAtLeast(0),
-                    againCount = base.againCount,
-                    hardCount = base.hardCount,
-                    goodCount = base.goodCount,
-                    easyCount = base.easyCount,
-                    completedCount = base.completedCount,
-                    remainingCount = remainingCount,
-                    recallAccuracy = recallAccuracy,
-                    passRate = passRate,
-                    estimatedMinutes = estimatedMinutes,
-                )
+                buildTodayStats(localDay, base, dueCount, settings)
             }
+        }
+
+        private fun buildTodayStats(
+            localDay: LocalDate,
+            base: TodayStatsBase,
+            dueCount: Int,
+            settings: com.zzz.androidvocab.core.model.AppSettings,
+        ): TodayStats {
+            val remainingCount =
+                remainingTodayCount(
+                    dueCount = dueCount,
+                    dailyNewLimit = settings.dailyNewLimit,
+                    learnedNewCount = base.newCount,
+                )
+            val avgMs =
+                if (base.completedCount > 0) {
+                    base.durationMs / base.completedCount
+                } else {
+                    DEFAULT_REVIEW_DURATION_MS
+                }
+            val estimatedMinutes = estimateCompletedMinutes(remainingCount, avgMs)
+            return TodayStats(
+                localDay = localDay.toString(),
+                newCount = base.newCount,
+                reviewCount = base.reviewCount,
+                againCount = base.againCount,
+                hardCount = base.hardCount,
+                goodCount = base.goodCount,
+                easyCount = base.easyCount,
+                completedCount = base.completedCount,
+                remainingCount = remainingCount,
+                recallAccuracy = base.recallAccuracy,
+                passRate = base.passRate,
+                estimatedMinutes = estimatedMinutes,
+            )
         }
 
         override fun observeAverageReviewDurationMs(
             days: Int,
             today: LocalDate,
+            selectedBooks: Set<BookCode>,
         ): Flow<Long?> {
             val safeDays = days.coerceAtLeast(1)
             val startDay = today.minusDays((safeDays - 1).toLong())
+            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
             return statsDao
-                .observeAverageDurationMs(startDay.toString(), today.toString())
+                .observeAverageDurationMs(startDay.toString(), today.toString(), bookCodes)
                 .map { average -> average?.roundToLong()?.takeIf { it > 0L } }
         }
 
@@ -143,11 +145,14 @@ class OfflineStatsRepository
         override fun observeReviewLoad(
             days: Int,
             now: Instant,
+            selectedBooks: Set<BookCode>,
         ): Flow<List<DailyReviewLoad>> {
+            if (days <= 0) return flowOf(emptyList())
+            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
             val zoneId = clockProvider.zoneId()
             val startDay = LocalDate.ofInstant(now, zoneId)
             val end = startDay.plusDays(days.toLong()).atStartOfDay(zoneId).toInstant()
-            return statsDao.observeDueCards(end).map { rows ->
+            return statsDao.observeDueCards(end, bookCodes).map { rows ->
                 val grouped =
                     rows
                         .mapNotNull { row ->
@@ -167,9 +172,12 @@ class OfflineStatsRepository
         override fun observeDailyActivity(
             days: Int,
             today: LocalDate,
+            selectedBooks: Set<BookCode>,
         ): Flow<List<DailyActivity>> {
+            if (days <= 0) return flowOf(emptyList())
             val startDay = today.minusDays((days - 1).coerceAtLeast(0).toLong())
-            return statsDao.observeDailyActivityRows(startDay.toString(), today.toString()).map { rows ->
+            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
+            return statsDao.observeDailyActivityRows(startDay.toString(), today.toString(), bookCodes).map { rows ->
                 val grouped = rows.associate { it.localDay to it.reviewCount }
                 (0 until days).map { offset ->
                     val day = startDay.plusDays(offset.toLong()).toString()
@@ -181,10 +189,14 @@ class OfflineStatsRepository
         override fun observeRetentionStats(
             days: Int,
             now: Instant,
+            selectedBooks: Set<BookCode>,
         ): Flow<RetentionStats> {
-            val from = now.minusSeconds(days.toLong() * 24L * 60L * 60L)
+            val from =
+                localLookbackStart(now, days, clockProvider.zoneId())
+                    ?: return flowOf(RetentionStats(0.0, 0.0, 0.0))
+            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
             return combine(
-                statsDao.observeReviewedCards(from),
+                statsDao.observeReviewedCards(from, bookCodes),
                 settingsRepository.settings,
             ) { cards, settings ->
                 val values =
@@ -201,8 +213,12 @@ class OfflineStatsRepository
             }
         }
 
-        override fun observeStreakStats(today: LocalDate): Flow<StreakStats> =
-            statsDao.observeActiveDays().map { days ->
+        override fun observeStreakStats(
+            today: LocalDate,
+            selectedBooks: Set<BookCode>,
+        ): Flow<StreakStats> {
+            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
+            return statsDao.observeActiveDays(bookCodes).map { days ->
                 val active = days.toSet()
                 StreakStats(
                     currentStreak = currentStreak(active, today),
@@ -210,13 +226,17 @@ class OfflineStatsRepository
                     activeDays = active,
                 )
             }
+        }
 
         override fun observeDifficultWords(
             days: Int,
             now: Instant,
+            selectedBooks: Set<BookCode>,
         ): Flow<List<DifficultWord>> {
-            val from = now.minusSeconds(days.toLong() * 24L * 60L * 60L)
-            return statsDao.observeDifficultWordRows(from).map { rows ->
+            val from = localLookbackStart(now, days, clockProvider.zoneId()) ?: return flowOf(emptyList())
+            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
+            return statsDao.observeDifficultWordRows(from, bookCodes).map { rows ->
+                if (rows.isEmpty()) return@map emptyList()
                 val words = statsDao.getWordsByIds(rows.map { it.wordId }).associateBy { it.id }
                 rows.mapNotNull { row ->
                     words[row.wordId]?.toModel()?.let { word ->
@@ -237,6 +257,16 @@ class OfflineStatsRepository
 
 private const val DEFAULT_REVIEW_DURATION_MS = 30_000L
 
+internal fun remainingTodayCount(
+    dueCount: Int,
+    dailyNewLimit: Int,
+    learnedNewCount: Int,
+): Int {
+    val safeDueCount = dueCount.coerceAtLeast(0).toLong()
+    val remainingNew = (dailyNewLimit.toLong() - learnedNewCount.toLong()).coerceAtLeast(0L)
+    return (safeDueCount + remainingNew).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+}
+
 private data class TodayStatsBase(
     val againCount: Int,
     val hardCount: Int,
@@ -244,12 +274,13 @@ private data class TodayStatsBase(
     val easyCount: Int,
     val completedCount: Int,
     val newCount: Int,
+    val reviewCount: Int,
     val durationMs: Long,
+    val recallAccuracy: Double,
+    val passRate: Double,
 )
 
 private fun List<Double>.averageOrZero(): Double = if (isEmpty()) 0.0 else average()
-
-private fun String.toBookCodeOrNull(): BookCode? = BookCode.entries.firstOrNull { it.name == this }
 
 private fun List<Double>.percentile(p: Double): Double {
     if (isEmpty()) return 0.0

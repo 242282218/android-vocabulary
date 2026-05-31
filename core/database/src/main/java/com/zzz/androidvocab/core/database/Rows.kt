@@ -53,11 +53,6 @@ data class BookStatsRow(
     val familiarCount: Int,
 )
 
-data class DailyRatingCountRow(
-    val rating: String,
-    val count: Int,
-)
-
 data class DueCardRow(
     val dueAt: java.time.Instant?,
 )
@@ -71,15 +66,4 @@ data class DifficultWordRow(
     val wordId: String,
     val againCount: Int,
     val hardCount: Int,
-)
-
-data class ExportDailyStatsRow(
-    val localDay: String,
-    val newCount: Int,
-    val againCount: Int,
-    val hardCount: Int,
-    val goodCount: Int,
-    val easyCount: Int,
-    val completedCount: Int,
-    val durationMs: Long,
 )

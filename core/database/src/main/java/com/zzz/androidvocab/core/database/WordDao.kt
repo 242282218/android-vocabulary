@@ -71,7 +71,16 @@ interface WordDao {
         WITH selected_words AS (
           SELECT
             w.id AS wordId,
-            MIN(m.orderIndex) AS firstOrderIndex
+            MIN(m.orderIndex) AS firstOrderIndex,
+            MIN(
+              CASE
+                WHEN :query = '' THEN 4
+                WHEN w.word = :query COLLATE NOCASE THEN 0
+                WHEN w.word LIKE :query || '%' ESCAPE '\' THEN 1
+                WHEN w.word LIKE '%' || :query || '%' ESCAPE '\' THEN 2
+                ELSE 3
+              END
+            ) AS matchRank
           FROM wordbook_memberships m
           JOIN word_entries w ON w.id = m.wordId
           WHERE m.bookCode IN (:bookCodes)
@@ -88,7 +97,7 @@ interface WordDao {
         )
         SELECT w.* FROM word_entries w
         JOIN selected_words s ON s.wordId = w.id
-        ORDER BY s.firstOrderIndex ASC, w.frequency DESC, w.word ASC
+        ORDER BY s.matchRank ASC, s.firstOrderIndex ASC, w.frequency DESC, w.word ASC
         """,
     )
     fun searchWords(

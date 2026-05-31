@@ -1,0 +1,5 @@
+<resources>
+    <string name="notification_channel_daily_review">每日复习</string>
+    <string name="notification_daily_review_title">该复习单词了</string>
+    <string name="notification_daily_review_text">打开应用完成今天的复习。</string>
+</resources>

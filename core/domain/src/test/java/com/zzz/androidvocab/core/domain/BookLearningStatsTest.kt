@@ -58,6 +58,67 @@ class BookLearningStatsTest {
         assertEquals(listOf("familiar"), result.map { it.id })
     }
 
+    @Test
+    fun statusFiltersIgnoreCardsOutsideSelectedBooks() {
+        val words = listOf(word("shared"))
+        val cards =
+            listOf(
+                reviewCard(
+                    wordId = "shared",
+                    bookCode = BookCode.CET6,
+                    retrievability = 0.90,
+                    dueAt = now.minusSeconds(60),
+                ),
+            )
+
+        val dueResult =
+            filterWordsByStatus(
+                words = words,
+                cards = cards,
+                selectedBooks = setOf(BookCode.CET4),
+                statusFilter = WordStatusFilter.Due,
+                now = now,
+                retrievability = { it.retrievability },
+            )
+        val unlearnedResult =
+            filterWordsByStatus(
+                words = words,
+                cards = cards,
+                selectedBooks = setOf(BookCode.CET4),
+                statusFilter = WordStatusFilter.Unlearned,
+                now = now,
+                retrievability = { it.retrievability },
+            )
+
+        assertEquals(emptyList<String>(), dueResult.map { it.id })
+        assertEquals(listOf("shared"), unlearnedResult.map { it.id })
+    }
+
+    @Test
+    fun sharedWordIsNotUnlearnedWhenAnySelectedBookHasCard() {
+        val words = listOf(word("shared"))
+        val cards =
+            listOf(
+                reviewCard(
+                    wordId = "shared",
+                    bookCode = BookCode.CET4,
+                    retrievability = 0.80,
+                ),
+            )
+
+        val result =
+            filterWordsByStatus(
+                words = words,
+                cards = cards,
+                selectedBooks = setOf(BookCode.CET4, BookCode.CET6),
+                statusFilter = WordStatusFilter.Unlearned,
+                now = now,
+                retrievability = { it.retrievability },
+            )
+
+        assertEquals(emptyList<String>(), result.map { it.id })
+    }
+
     private fun word(id: String): WordEntry =
         WordEntry(
             id = id,
@@ -76,17 +137,19 @@ class BookLearningStatsTest {
     private fun reviewCard(
         wordId: String,
         retrievability: Double,
+        bookCode: BookCode = BookCode.CET4,
+        dueAt: Instant = now.plusSeconds(86_400),
     ): ReviewCard =
         ReviewCard(
-            id = "card-$wordId",
+            id = "card-${bookCode.name}-$wordId",
             wordId = wordId,
-            bookCode = BookCode.CET4,
+            bookCode = bookCode,
             state = ReviewState.Review,
             difficulty = 5.0,
             stability = 20.0,
             retrievability = retrievability,
             scheduledDays = 21,
-            dueAt = now.plusSeconds(86_400),
+            dueAt = dueAt,
             lastReviewAt = now.minusSeconds(86_400),
             reviewCount = 3,
             lapseCount = 0,

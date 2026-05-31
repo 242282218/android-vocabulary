@@ -9,9 +9,14 @@ class GetDailyActivityUseCase
     @Inject
     constructor(
         private val statsRepository: StatsRepository,
+        private val settingsRepository: SettingsRepository,
         private val clockProvider: ClockProvider,
     ) {
         @OptIn(ExperimentalCoroutinesApi::class)
         operator fun invoke(days: Int) =
-            clockProvider.observeToday().flatMapLatest { today -> statsRepository.observeDailyActivity(days, today) }
+            settingsRepository.settings.flatMapLatest { settings ->
+                clockProvider.observeToday().flatMapLatest { today ->
+                    statsRepository.observeDailyActivity(days, today, settings.selectedBooks)
+                }
+            }
     }

@@ -17,27 +17,27 @@ private val VocabTypography =
     Typography(
         displayMedium =
             TextStyle(
-                fontFamily = FontFamily.Serif,
+                fontFamily = FontFamily.SansSerif,
                 fontWeight = FontWeight.Medium,
                 fontSize = 46.sp,
                 lineHeight = 50.sp,
-                letterSpacing = (-0.4).sp,
+                letterSpacing = 0.sp,
             ),
         displaySmall =
             TextStyle(
-                fontFamily = FontFamily.Serif,
+                fontFamily = FontFamily.SansSerif,
                 fontWeight = FontWeight.Medium,
                 fontSize = 38.sp,
                 lineHeight = 44.sp,
-                letterSpacing = (-0.2).sp,
+                letterSpacing = 0.sp,
             ),
         headlineMedium =
             TextStyle(
-                fontFamily = FontFamily.Serif,
+                fontFamily = FontFamily.SansSerif,
                 fontWeight = FontWeight.Medium,
                 fontSize = 27.sp,
                 lineHeight = 32.sp,
-                letterSpacing = (-0.1).sp,
+                letterSpacing = 0.sp,
             ),
         titleLarge =
             TextStyle(
@@ -73,7 +73,7 @@ private val VocabTypography =
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 12.sp,
                 lineHeight = 16.sp,
-                letterSpacing = 0.1.sp,
+                letterSpacing = 0.sp,
             ),
     )
 
@@ -94,7 +94,7 @@ fun VocabTheme(
                 primary = VocabColors.Primary,
                 onPrimary = Color.White,
                 primaryContainer = VocabColors.PrimaryDarkSoft,
-                onPrimaryContainer = Color(0xFFF6D8C9),
+                onPrimaryContainer = Color(0xFFDCE7FF),
                 background = VocabColors.DarkBackground,
                 onBackground = VocabColors.TextPrimaryDark,
                 surface = VocabColors.DarkSurface,
@@ -105,21 +105,21 @@ fun VocabTheme(
                 outlineVariant = VocabColors.DarkOutline,
                 secondary = VocabColors.Success,
                 onSecondary = Color.White,
-                secondaryContainer = Color(0xFF2F4933),
-                onSecondaryContainer = Color(0xFFE2F0DE),
+                secondaryContainer = Color(0xFF203A2D),
+                onSecondaryContainer = Color(0xFFE1F2E7),
                 tertiary = VocabColors.Warning,
-                tertiaryContainer = Color(0xFF4B3518),
-                onTertiaryContainer = Color(0xFFF8E5BE),
+                tertiaryContainer = Color(0xFF433218),
+                onTertiaryContainer = Color(0xFFF8E7C1),
                 error = VocabColors.Danger,
-                errorContainer = Color(0xFF5C2A22),
-                onErrorContainer = Color(0xFFF6D5CC),
+                errorContainer = Color(0xFF4A1D20),
+                onErrorContainer = Color(0xFFFFDDD9),
             )
         } else {
             lightColorScheme(
                 primary = VocabColors.Primary,
                 onPrimary = Color.White,
                 primaryContainer = VocabColors.PrimarySoft,
-                onPrimaryContainer = Color(0xFF5B2B1D),
+                onPrimaryContainer = Color(0xFF1A3C8C),
                 background = VocabColors.LightBackground,
                 onBackground = VocabColors.TextPrimaryLight,
                 surface = VocabColors.LightSurface,
@@ -131,13 +131,13 @@ fun VocabTheme(
                 secondary = VocabColors.Success,
                 onSecondary = Color.White,
                 secondaryContainer = VocabColors.SuccessSoft,
-                onSecondaryContainer = Color(0xFF284A2F),
+                onSecondaryContainer = Color(0xFF21442E),
                 tertiary = VocabColors.Warning,
                 tertiaryContainer = VocabColors.WarningSoft,
-                onTertiaryContainer = Color(0xFF51340E),
+                onTertiaryContainer = Color(0xFF4F360C),
                 error = VocabColors.Danger,
                 errorContainer = VocabColors.DangerSoft,
-                onErrorContainer = Color(0xFF5C2A22),
+                onErrorContainer = Color(0xFF6A1B1B),
             )
         }
     MaterialTheme(colorScheme = colors, typography = VocabTypography, content = content)

@@ -4,7 +4,9 @@ import com.zzz.androidvocab.core.common.ClockProvider
 import com.zzz.androidvocab.core.domain.GetReviewLoadUseCase
 import com.zzz.androidvocab.core.domain.GetTodayOverviewUseCase
 import com.zzz.androidvocab.core.domain.ImportVocabularyUseCase
+import com.zzz.androidvocab.core.domain.ObserveSubmittedCardQueueStateUseCase
 import com.zzz.androidvocab.core.domain.ReviewRepository
+import com.zzz.androidvocab.core.domain.ReviewSessionCoordinator
 import com.zzz.androidvocab.core.domain.SettingsRepository
 import com.zzz.androidvocab.core.domain.StatsRepository
 import com.zzz.androidvocab.core.domain.VocabularyRepository
@@ -123,9 +125,149 @@ class TodayViewModelTest {
             assertNull(ready.await().errorMessage)
         }
 
-    private fun viewModel(vocabularyRepository: VocabularyRepository): TodayViewModel {
+    @Test
+    fun submittedCardIsHiddenFromTodayWhileQueueStillContainsStaleEntry() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+            val completedImport = ImportAttempt().apply { complete() }
+            val vocabularyRepository = FakeVocabularyRepository(completedImport)
+            val reviewRepository = FakeReviewRepository()
+            reviewRepository.queue.value =
+                TodayQueue(
+                    dueItems = listOf(reviewQueueItem(cardId = CARD_ID, wordId = WORD_ID)),
+                    newItems = emptyList(),
+                )
+            val reviewSessionCoordinator = ReviewSessionCoordinator().also { it.markSubmittedCard(CARD_ID) }
+            val viewModel =
+                viewModel(
+                    vocabularyRepository = vocabularyRepository,
+                    reviewRepository = reviewRepository,
+                    reviewSessionCoordinator = reviewSessionCoordinator,
+                )
+
+            val ready =
+                async(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.first { !it.isLoading && !it.isImporting }
+                }
+            runCurrent()
+
+            val state = ready.await()
+            assertEquals(0, state.overview?.queue?.totalCount)
+            assertEquals(0, state.overview?.stats?.remainingCount)
+            assertEquals(true, state.isRefreshingReviewSession)
+        }
+
+    @Test
+    fun todayShowsNextCardCountWhilePendingSubmittedCardIsStillInRawQueue() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+            val completedImport = ImportAttempt().apply { complete() }
+            val vocabularyRepository = FakeVocabularyRepository(completedImport)
+            val reviewRepository = FakeReviewRepository()
+            reviewRepository.queue.value =
+                TodayQueue(
+                    dueItems =
+                        listOf(
+                            reviewQueueItem(cardId = CARD_ID, wordId = WORD_ID),
+                            reviewQueueItem(cardId = "card-2", wordId = "word-2"),
+                        ),
+                    newItems = emptyList(),
+                )
+            val reviewSessionCoordinator = ReviewSessionCoordinator().also { it.markSubmittedCard(CARD_ID) }
+            val viewModel =
+                viewModel(
+                    vocabularyRepository = vocabularyRepository,
+                    reviewRepository = reviewRepository,
+                    reviewSessionCoordinator = reviewSessionCoordinator,
+                )
+
+            val ready =
+                async(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.first { !it.isLoading && !it.isImporting }
+                }
+            runCurrent()
+
+            val state = ready.await()
+            assertEquals(1, state.overview?.queue?.totalCount)
+            assertEquals(1, state.overview?.stats?.remainingCount)
+            assertEquals(false, state.isRefreshingReviewSession)
+        }
+
+    @Test
+    fun todayClearsRefreshingStateWhenSubmittedCardActuallyLeavesQueue() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+            val completedImport = ImportAttempt().apply { complete() }
+            val vocabularyRepository = FakeVocabularyRepository(completedImport)
+            val reviewRepository = FakeReviewRepository()
+            reviewRepository.queue.value =
+                TodayQueue(
+                    dueItems = listOf(reviewQueueItem(cardId = CARD_ID, wordId = WORD_ID)),
+                    newItems = emptyList(),
+                )
+            val reviewSessionCoordinator = ReviewSessionCoordinator().also { it.markSubmittedCard(CARD_ID) }
+            val viewModel =
+                viewModel(
+                    vocabularyRepository = vocabularyRepository,
+                    reviewRepository = reviewRepository,
+                    reviewSessionCoordinator = reviewSessionCoordinator,
+                )
+
+            val ready =
+                async(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.first { !it.isLoading && !it.isImporting }
+                }
+            runCurrent()
+            ready.await()
+
+            reviewRepository.queue.value = TodayQueue(dueItems = emptyList(), newItems = emptyList())
+            runCurrent()
+
+            val state = viewModel.uiState.value
+            assertEquals(false, state.isRefreshingReviewSession)
+            assertEquals(0, state.overview?.queue?.totalCount)
+            assertEquals(null, reviewSessionCoordinator.submittedCardId.value)
+        }
+
+    @Test
+    fun keepsSubmittedCardPendingWhenOnlyFilteredQueueDropsIt() =
+        runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+            val completedImport = ImportAttempt().apply { complete() }
+            val vocabularyRepository = FakeVocabularyRepository(completedImport)
+            val reviewRepository = FakeReviewRepository()
+            reviewRepository.queue.value = TodayQueue(dueItems = emptyList(), newItems = emptyList())
+            reviewRepository.allBooksQueue.value =
+                TodayQueue(
+                    dueItems = listOf(reviewQueueItem(cardId = CARD_ID, wordId = WORD_ID)),
+                    newItems = emptyList(),
+                )
+            val reviewSessionCoordinator = ReviewSessionCoordinator().also { it.markSubmittedCard(CARD_ID) }
+            val viewModel =
+                viewModel(
+                    vocabularyRepository = vocabularyRepository,
+                    reviewRepository = reviewRepository,
+                    reviewSessionCoordinator = reviewSessionCoordinator,
+                )
+
+            val ready =
+                async(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.first { !it.isLoading && !it.isImporting }
+                }
+            runCurrent()
+
+            val state = ready.await()
+            assertEquals(false, state.isRefreshingReviewSession)
+            assertEquals(0, state.overview?.queue?.totalCount)
+            assertEquals(CARD_ID, reviewSessionCoordinator.submittedCardId.value)
+        }
+
+    private fun viewModel(
+        vocabularyRepository: VocabularyRepository,
+        reviewRepository: FakeReviewRepository = FakeReviewRepository(),
+        reviewSessionCoordinator: ReviewSessionCoordinator = ReviewSessionCoordinator(),
+    ): TodayViewModel {
         val settingsRepository = FakeSettingsRepository()
-        val reviewRepository = FakeReviewRepository()
         val statsRepository = FakeStatsRepository()
         val clockProvider = FixedClockProvider()
         return TodayViewModel(
@@ -140,8 +282,17 @@ class TodayViewModelTest {
             getReviewLoadUseCase =
                 GetReviewLoadUseCase(
                     statsRepository = statsRepository,
+                    settingsRepository = settingsRepository,
                     clockProvider = clockProvider,
                 ),
+            observeSubmittedCardQueueStateUseCase =
+                ObserveSubmittedCardQueueStateUseCase(
+                    reviewRepository = reviewRepository,
+                    settingsRepository = settingsRepository,
+                    reviewSessionCoordinator = reviewSessionCoordinator,
+                    clockProvider = clockProvider,
+                ),
+            reviewSessionCoordinator = reviewSessionCoordinator,
         )
     }
 }
@@ -195,11 +346,14 @@ private class ImportAttempt(
 }
 
 private class FakeReviewRepository : ReviewRepository {
+    val queue = MutableStateFlow(TodayQueue(dueItems = emptyList(), newItems = emptyList()))
+    val allBooksQueue = MutableStateFlow(TodayQueue(dueItems = emptyList(), newItems = emptyList()))
+
     override fun observeTodayQueue(
         now: Instant,
         selectedBooks: Set<BookCode>,
         dailyNewLimit: Int,
-    ): Flow<TodayQueue> = flowOf(TodayQueue(dueItems = emptyList(), newItems = emptyList()))
+    ): Flow<TodayQueue> = if (selectedBooks.isEmpty()) allBooksQueue else queue
 
     override suspend fun submitFeedback(command: SubmitFeedbackCommand): ReviewResult = unused()
 
@@ -227,6 +381,7 @@ private class FakeStatsRepository : StatsRepository {
     override fun observeTodayStats(
         localDay: LocalDate,
         now: Instant,
+        selectedBooks: Set<BookCode>,
     ): Flow<TodayStats> =
         flowOf(
             TodayStats(
@@ -248,6 +403,7 @@ private class FakeStatsRepository : StatsRepository {
     override fun observeAverageReviewDurationMs(
         days: Int,
         today: LocalDate,
+        selectedBooks: Set<BookCode>,
     ): Flow<Long?> = flowOf(null)
 
     override fun observeBookStats(now: Instant): Flow<List<BookStats>> = flowOf(emptyList())
@@ -255,23 +411,30 @@ private class FakeStatsRepository : StatsRepository {
     override fun observeReviewLoad(
         days: Int,
         now: Instant,
+        selectedBooks: Set<BookCode>,
     ): Flow<List<DailyReviewLoad>> = flowOf(emptyList())
 
     override fun observeDailyActivity(
         days: Int,
         today: LocalDate,
+        selectedBooks: Set<BookCode>,
     ): Flow<List<DailyActivity>> = flowOf(emptyList())
 
     override fun observeRetentionStats(
         days: Int,
         now: Instant,
+        selectedBooks: Set<BookCode>,
     ): Flow<RetentionStats> = flowOf(RetentionStats(0.0, 0.0, 0.0))
 
-    override fun observeStreakStats(today: LocalDate): Flow<StreakStats> = flowOf(StreakStats(0, 0, emptySet()))
+    override fun observeStreakStats(
+        today: LocalDate,
+        selectedBooks: Set<BookCode>,
+    ): Flow<StreakStats> = flowOf(StreakStats(0, 0, emptySet()))
 
     override fun observeDifficultWords(
         days: Int,
         now: Instant,
+        selectedBooks: Set<BookCode>,
     ): Flow<List<DifficultWord>> = flowOf(emptyList())
 
     override suspend fun rebuildDailyStatsCache(updatedAt: Instant): Int = 0
@@ -313,3 +476,46 @@ private class FixedClockProvider : ClockProvider {
 }
 
 private fun unused(): Nothing = error("Not used by this test")
+
+private fun reviewQueueItem(
+    cardId: String,
+    wordId: String,
+): ReviewQueueItem =
+    ReviewQueueItem(
+        card =
+            ReviewCard(
+                id = cardId,
+                wordId = wordId,
+                bookCode = BookCode.CET4,
+                state = com.zzz.androidvocab.core.model.ReviewState.Review,
+                difficulty = 5.0,
+                stability = 8.0,
+                retrievability = 0.9,
+                scheduledDays = 8,
+                dueAt = Instant.parse("2026-05-16T08:00:00Z"),
+                lastReviewAt = Instant.parse("2026-05-15T08:00:00Z"),
+                reviewCount = 1,
+                lapseCount = 0,
+                firstReviewedAt = Instant.parse("2026-05-15T08:00:00Z"),
+                createdAt = Instant.parse("2026-05-15T08:00:00Z"),
+                updatedAt = Instant.parse("2026-05-15T08:00:00Z"),
+            ),
+        word =
+            WordEntry(
+                id = wordId,
+                word = "ability",
+                meaning = "能力",
+                phonetic = null,
+                partOfSpeech = null,
+                definition = null,
+                cefrLevel = null,
+                cefrRank = 0.0,
+                frequency = 0.0,
+                sourceFlags = emptyList(),
+                coverageTier = null,
+            ),
+        isNew = false,
+    )
+
+private const val CARD_ID = "card|CET4|word-ability"
+private const val WORD_ID = "word-ability"

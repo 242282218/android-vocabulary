@@ -18,29 +18,38 @@ class GetTodayOverviewUseCase
         @OptIn(ExperimentalCoroutinesApi::class)
         operator fun invoke() =
             settingsRepository.settings.flatMapLatest { settings ->
-                reviewRepository
-                    .observeTodayQueue(clockProvider.now(), settings.selectedBooks, settings.dailyNewLimit)
-                    .flatMapLatest { queue ->
-                        val now = clockProvider.now()
-                        val today = clockProvider.localDate(now)
-                        combine(
-                            statsRepository.observeTodayStats(today, now),
-                            statsRepository.observeAverageReviewDurationMs(AVERAGE_DURATION_DAYS, today),
-                        ) { stats, averageDurationMs ->
-                            TodayOverview(
-                                queue = queue,
-                                stats =
-                                    stats.copy(
-                                        remainingCount = queue.totalCount,
-                                        estimatedMinutes =
-                                            estimateRemainingMinutes(
-                                                remainingCount = queue.totalCount,
-                                                averageDurationMs = averageDurationMs,
-                                            ),
-                                    ),
-                                selectedBooks = settings.selectedBooks.toList(),
-                            )
+                clockProvider.observeNow().flatMapLatest { now ->
+                    val today = clockProvider.localDate(now)
+                    reviewRepository
+                        .observeTodayQueue(now, settings.selectedBooks, settings.dailyNewLimit)
+                        .flatMapLatest { queue ->
+                            combine(
+                                statsRepository.observeTodayStats(
+                                    localDay = today,
+                                    now = now,
+                                    selectedBooks = settings.selectedBooks,
+                                ),
+                                statsRepository.observeAverageReviewDurationMs(
+                                    days = AVERAGE_DURATION_DAYS,
+                                    today = today,
+                                    selectedBooks = settings.selectedBooks,
+                                ),
+                            ) { stats, averageDurationMs ->
+                                TodayOverview(
+                                    queue = queue,
+                                    stats =
+                                        stats.copy(
+                                            remainingCount = queue.totalCount,
+                                            estimatedMinutes =
+                                                estimateRemainingMinutes(
+                                                    remainingCount = queue.totalCount,
+                                                    averageDurationMs = averageDurationMs,
+                                                ),
+                                        ),
+                                    selectedBooks = settings.selectedBooks.toList(),
+                                )
+                            }
                         }
-                    }
+                }
             }
     }

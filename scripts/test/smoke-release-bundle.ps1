@@ -553,6 +553,7 @@ try {
     } else {
         $buildApksArgs += '--connected-device'
         $buildApksArgs += "--device-id=$script:ResolvedDeviceSerial"
+        $buildApksArgs += "--adb=$script:AdbPath"
     }
 
     try {
@@ -603,6 +604,7 @@ try {
 
     $installArgs = @('install-apks', "--apks=$script:ResolvedApksPath")
     $installArgs += "--device-id=$script:ResolvedDeviceSerial"
+    $installArgs += "--adb=$script:AdbPath"
 
     Write-Host '[info] bundletool install-apks'
     $script:CurrentBundleSmokeStage = 'bundletoolInstallApks'

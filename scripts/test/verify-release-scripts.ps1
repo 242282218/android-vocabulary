@@ -137,6 +137,21 @@ function Test-PowerShellParse {
     }
 }
 
+function Test-ReleaseManifestBackupPolicy {
+    $manifestPath = Join-AndroidVocabularyPath $repoRoot @('app', 'src', 'main', 'AndroidManifest.xml')
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw
+
+    if ($manifest -notmatch 'android:allowBackup\s*=\s*"false"') {
+        throw 'AndroidManifest.xml must keep android:allowBackup="false" for local-only learning data.'
+    }
+
+    foreach ($attribute in @('android:fullBackupContent', 'android:dataExtractionRules')) {
+        if ($manifest -match [regex]::Escape($attribute)) {
+            throw "AndroidManifest.xml must not declare $attribute while backup is disabled."
+        }
+    }
+}
+
 function Test-ReleaseReadinessMetadataKeys {
     $releaseReadinessScriptPath = Join-AndroidVocabularyPath $repoRoot @('scripts', 'test', 'verify-release-readiness.ps1')
     $releaseReadinessScript = Get-Content -LiteralPath $releaseReadinessScriptPath -Raw
@@ -154,6 +169,33 @@ function Test-ReleaseReadinessMetadataKeys {
 
     Assert-UniqueKeyValueMetadata `
         -Path (Join-AndroidVocabularyPath $repoRoot @('build', 'release-readiness', 'release-readiness-run.txt'))
+}
+
+function Test-ReleaseReadinessDocumentation {
+    $expectedDocumentationPatterns = @(
+        'github-actions-release-evidence',
+        'workflow=Android',
+        'conclusion=success',
+        'commitSha=<git rev-parse HEAD>',
+        'serverUrl=https://github.com',
+        'repository=<owner>/<repo>',
+        'runId=<github run id>',
+        'runAttempt=<github run attempt>',
+        'runUrl=https://github.com/<owner>/<repo>/actions/runs/<github run id>',
+        'checks=verify-release-scripts, verify-vocab-assets, dependencyCheckAggregate, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest',
+        'verify-release-readiness.ps1'
+    )
+
+    foreach ($relativePath in @('README.md', 'docs/release.md')) {
+        $content = Get-Content `
+            -LiteralPath (Join-AndroidVocabularyPath $repoRoot ($relativePath -split '/')) `
+            -Raw
+        foreach ($pattern in $expectedDocumentationPatterns) {
+            if ($content -notmatch [regex]::Escape($pattern)) {
+                throw "$relativePath must document current GitHub Actions release evidence format: $pattern"
+            }
+        }
+    }
 }
 
 function Test-VerifyDeviceFailureStageCases {
@@ -224,7 +266,7 @@ function Test-ReleaseArtifactNaming {
     Assert-Equal `
         -Name 'required GitHub Actions checks' `
         -Actual ((Get-AndroidVocabularyRequiredGitHubActionsChecks) -join ', ') `
-        -Expected 'verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest'
+        -Expected 'verify-release-scripts, verify-vocab-assets, dependencyCheckAggregate, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest'
 
     $releaseScript = Get-Content `
         -LiteralPath (Join-AndroidVocabularyPath $repoRoot @('scripts', 'release', 'build-release.ps1')) `
@@ -316,20 +358,65 @@ function Test-ReleaseArtifactNaming {
     if ($releaseArtifactsScript -notmatch 'releaseApkSha256=') {
         throw 'verify-release-artifacts.ps1 must write release APK SHA-256 to metadata.'
     }
+    if ($releaseArtifactsScript -notmatch 'releaseApkLastWriteTime=') {
+        throw 'verify-release-artifacts.ps1 must write release APK last-write time to metadata.'
+    }
+    if ($releaseArtifactsScript -notmatch 'releaseApkOlderThanBuildValidation=') {
+        throw 'verify-release-artifacts.ps1 must record whether the release APK is older than build-validation output.'
+    }
     if ($releaseArtifactsScript -notmatch 'releaseBundleStatus=') {
         throw 'verify-release-artifacts.ps1 must write release AAB status to metadata.'
     }
     if ($releaseArtifactsScript -notmatch 'releaseBundleSha256=') {
         throw 'verify-release-artifacts.ps1 must write release AAB SHA-256 to metadata.'
     }
+    if ($releaseArtifactsScript -notmatch 'releaseBundleLastWriteTime=') {
+        throw 'verify-release-artifacts.ps1 must write release AAB last-write time to metadata.'
+    }
+    if ($releaseArtifactsScript -notmatch 'releaseBundleOlderThanBuildValidation=') {
+        throw 'verify-release-artifacts.ps1 must record whether the release AAB is older than build-validation output.'
+    }
     if ($releaseArtifactsScript -notmatch 'Get-ReleaseArtifactSha256') {
         throw 'verify-release-artifacts.ps1 must centralize release artifact SHA-256 calculation.'
+    }
+    if ($releaseArtifactsScript -notmatch 'Get-ReleaseArtifactLastWriteTimeValue') {
+        throw 'verify-release-artifacts.ps1 must centralize release artifact timestamp collection.'
+    }
+    if ($releaseArtifactsScript -notmatch 'Test-ReleaseArtifactOlderThan') {
+        throw 'verify-release-artifacts.ps1 must compare current release artifacts against build-validation timestamps.'
     }
     if ($releaseArtifactsScript -notmatch 'buildValidationApkExists=') {
         throw 'verify-release-artifacts.ps1 must record build-validation APK presence.'
     }
+    if ($releaseArtifactsScript -notmatch 'buildValidationApkSha256=') {
+        throw 'verify-release-artifacts.ps1 must record build-validation APK SHA-256.'
+    }
+    if ($releaseArtifactsScript -notmatch 'buildValidationApkLastWriteTime=') {
+        throw 'verify-release-artifacts.ps1 must record build-validation APK last-write time.'
+    }
     if ($releaseArtifactsScript -notmatch 'buildValidationBundleExists=') {
         throw 'verify-release-artifacts.ps1 must record build-validation AAB presence.'
+    }
+    if ($releaseArtifactsScript -notmatch 'buildValidationBundleSha256=') {
+        throw 'verify-release-artifacts.ps1 must record build-validation AAB SHA-256.'
+    }
+    if ($releaseArtifactsScript -notmatch 'buildValidationBundleLastWriteTime=') {
+        throw 'verify-release-artifacts.ps1 must record build-validation AAB last-write time.'
+    }
+    if ($releaseArtifactsScript -notmatch 'staleCurrentVersionArtifacts=') {
+        throw 'verify-release-artifacts.ps1 must record stale current-version release artifact names.'
+    }
+    if ($releaseArtifactsScript -notmatch 'releaseArtifactsRemediation=') {
+        throw 'verify-release-artifacts.ps1 must write release artifact remediation guidance on failure.'
+    }
+    if ($releaseArtifactsScript -notmatch 'without -AllowUnsigned') {
+        throw 'verify-release-artifacts.ps1 remediation must tell users to rebuild signed release artifacts.'
+    }
+    if ($releaseArtifactsScript -notmatch 'archive them outside dist before final audit') {
+        throw 'verify-release-artifacts.ps1 remediation must tell users how to handle stale release-named artifacts.'
+    }
+    if ($releaseArtifactsScript -notmatch 'older than the matching build-validation outputs') {
+        throw 'verify-release-artifacts.ps1 remediation must explain when current release-named artifacts are stale.'
     }
 
     $releaseReadinessScript = Get-Content `
@@ -339,6 +426,7 @@ function Test-ReleaseArtifactNaming {
         throw 'verify-release-readiness.ps1 must use the shared GitHub Actions required checks list.'
     }
     foreach ($pattern in @(
+            "-Name 'gitWorktreeClean'",
             "-Name 'releaseArtifacts'",
             "-Name 'releaseApkSmoke'",
             "-Name 'deviceAabVerification'",
@@ -350,6 +438,16 @@ function Test-ReleaseArtifactNaming {
     }
     foreach ($pattern in @(
             'Get-CurrentGitHeadSha',
+            'function Get-CurrentGitStatusEntries',
+            'status --porcelain=v1 --untracked-files=all',
+            'function Format-GitStatusSummary',
+            'function Get-ReadinessRemediationText',
+            'gitWorktreeStatus=',
+            'gitWorktreeDirtyCount=',
+            'gitWorktreeDirtyEntries=',
+            'gitWorktreeRemediation=',
+            '$gitWorktreeClean = $gitWorktreeDirtyCount -eq 0',
+            'remediation=$gitWorktreeRemediation',
             'function Copy-ReadinessEvidenceArtifact',
             'Remove-Item -LiteralPath $destinationPath -Force -ErrorAction SilentlyContinue',
             '$resolvedSourcePath -eq $resolvedDestinationPath',
@@ -362,6 +460,22 @@ function Test-ReleaseArtifactNaming {
             'releaseArtifacts:${ReleaseArtifactsArchive}:${ReleaseArtifactsArchiveSha256}',
             'deviceBundleSmoke:${DeviceBundleSmokeArchive}:${DeviceBundleSmokeArchiveSha256}',
             'evidenceArchives=',
+            'releaseArtifactsRemediation=',
+            'releaseArtifactsStaleCurrentVersionArtifacts=',
+            '$releaseArtifactsMetadataRemediation = Get-MetadataValueOrDefault $releaseArtifacts ''releaseArtifactsRemediation'' ''<missing>''',
+            '$releaseArtifactsStaleCurrentVersionArtifacts =',
+            'Get-MetadataValueOrDefault $releaseArtifacts ''staleCurrentVersionArtifacts''',
+            'Stale current-version release artifacts:',
+            'function Get-BlockerSummaryValue',
+            'function Get-BlockerActionSummaryValue',
+            'blockerSummary=',
+            'blockerActionSummary=',
+            '$blockerSummaryItems = @(',
+            '$blockerSummary = Get-BlockerSummaryValue -Items $blockerSummaryItems',
+            '$blockerActionSummaryItems = @(',
+            '$blockerActionSummary = Get-BlockerActionSummaryValue -Items $blockerActionSummaryItems',
+            'Blockers: $blockerSummary.',
+            'Actions: $blockerActionSummary.',
             'evidence-release-artifacts-run.txt',
             'evidence-smoke-release-apk-run.txt',
             'evidence-verification-completed.txt',
@@ -378,6 +492,8 @@ function Test-ReleaseArtifactNaming {
             'githubActionsEvidenceArchive=',
             'githubActionsEvidenceArchiveSha256=',
             'githubActionsEvidenceMetadata=',
+            'githubActionsServerUrl=',
+            'githubActionsRepository=',
             'failedRequirementNames=',
             '$failedRequirementNames = @(',
             'ForEach-Object { $_.Substring(0, $_.IndexOf(''='')) }',
@@ -420,9 +536,11 @@ function Test-ReleaseArtifactNaming {
             'Test-Sha256String $releaseArtifactsBundleSha256',
             '$releaseArtifactsBundleSha256 -eq $currentReleaseBundleSha256',
             'apkSmokeSha256=',
+            'apkSmokeRemediation=',
             'archive=$apkSmokeEvidenceArchive;archiveSha256=$apkSmokeEvidenceArchiveSha256',
             'Test-Sha256String $apkSmokeSha256',
             '$apkSmokeSha256 -eq $releaseArtifactsApkSha256',
+            'remediation=$apkSmokeRemediation',
             'deviceBundleSha256=',
             'archive=$deviceVerificationEvidenceArchive;archiveSha256=$deviceVerificationEvidenceArchiveSha256',
             'Test-Sha256String $deviceBundleSha256',
@@ -441,6 +559,8 @@ function Test-ReleaseArtifactNaming {
             'deviceBundleSmokeArchiveBundlePathMatchesCurrentVersionedName=',
             'deviceBundleSmokeArchiveReleaseReady=',
             'deviceBundleSmokeArchiveApkSetSigning=',
+            'deviceVerificationRemediation=',
+            'deviceBundleSmokeArchiveRemediation=',
             '$deviceBundleSmokeArchiveReady =',
             'Test-MetadataValue $deviceBundleSmokeArchive ''runStatus'' ''completed''',
             'Test-MetadataValue $deviceBundleSmokeArchive ''versionName'' $versionName',
@@ -454,6 +574,8 @@ function Test-ReleaseArtifactNaming {
             '$deviceBundleSmokeArchiveBundleSha256 -eq $deviceBundleSmokeSha256',
             '-Name ''deviceBundleSmokeArchive''',
             'archive=$deviceBundleSmokeEvidenceArchive;archiveSha256=$deviceBundleSmokeEvidenceArchiveSha256',
+            'remediation=$deviceVerificationRemediation',
+            'remediation=$deviceBundleSmokeArchiveRemediation',
             'path=$deviceBundleSmokeArchiveMetadata;archive=$deviceBundleSmokeEvidenceArchive;archiveSha256=$deviceBundleSmokeEvidenceArchiveSha256;bundleSmokeArchiveBundleSha256=',
             'githubActionsWorkflow=',
             'githubActionsConclusion=',
@@ -462,15 +584,22 @@ function Test-ReleaseArtifactNaming {
             'githubActionsRunAttempt=',
             'githubActionsRunUrl=',
             'githubActionsChecks=',
+            'githubActionsRemediation=',
             'githubActionsRequiredChecks=',
             '$githubWorkflow -eq ''Android''',
             '$githubConclusion -eq ''success''',
             '$githubCommitSha -eq $currentCommitSha',
             'Test-PositiveIntegerString $githubRunId',
             'Test-PositiveIntegerString $githubRunAttempt',
-            'Test-GitHubActionsRunUrl -RunUrl $githubRunUrl -RunId $githubRunId',
+            '$githubServerUrl -eq ''https://github.com''',
+            'Test-GitHubActionsRunUrl `',
+            '-RunUrl $githubRunUrl `',
+            '-RunId $githubRunId `',
+            '-ServerUrl $githubServerUrl `',
+            '-Repository $githubRepository',
             'Test-ContainsAllValues -Actual $githubChecks -Expected $requiredGitHubChecks',
             'archive=$githubActionsEvidenceArchive;archiveSha256=$githubActionsEvidenceArchiveSha256',
+            'remediation=$githubActionsRemediation',
             'Get-AndroidVocabularyRequiredGitHubActionsChecks'
         )) {
         if ($releaseReadinessScript -notmatch [regex]::Escape($pattern)) {
@@ -489,6 +618,8 @@ function Test-ReleaseArtifactNaming {
             'GITHUB_SERVER_URL',
             'GITHUB_REPOSITORY',
             'Unexpected GitHub workflow',
+            'serverUrl=',
+            'repository=',
             'conclusion=success',
             'runId=',
             'runAttempt=',
@@ -507,6 +638,7 @@ function Test-ReleaseArtifactNaming {
             'name: Android',
             'run: ./scripts/test/verify-release-scripts.ps1',
             'run: ./scripts/test/verify-vocab-assets.ps1',
+            'run: ./gradlew --no-daemon --console=plain dependencyCheckAggregate',
             'ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest pixel2Api30DebugAndroidTest',
             'run: ./scripts/test/write-github-actions-evidence.ps1',
             'name: github-actions-release-evidence',
@@ -514,6 +646,21 @@ function Test-ReleaseArtifactNaming {
         )) {
         if ($workflow -notmatch [regex]::Escape($pattern)) {
             throw "android.yml must keep release readiness evidence aligned with local checks: $pattern"
+        }
+    }
+
+    $rootBuildScript = Get-Content `
+        -LiteralPath (Join-Path $repoRoot 'build.gradle.kts') `
+        -Raw
+    foreach ($pattern in @(
+            'val nvdApiKeyProvider',
+            'providers.environmentVariable("NVD_API_KEY")',
+            '"dependencyCheckAggregate"',
+            'throw GradleException(',
+            'NVD API key is required'
+        )) {
+        if ($rootBuildScript -notmatch [regex]::Escape($pattern)) {
+            throw "build.gradle.kts must fail fast when dependency-check runs without NVD API key: $pattern"
         }
     }
 }
@@ -551,15 +698,17 @@ function Test-GitHubActionsEvidenceWriter {
         throw "GitHub Actions evidence was not written: $evidencePath"
     }
     $metadata = Get-Content -LiteralPath $evidencePath
-    foreach ($line in @(
-            'workflow=Android',
-            'conclusion=success',
-            'commitSha=0123456789abcdef0123456789abcdef01234567',
-            'runId=123456789',
-            'runAttempt=2',
-            'runUrl=https://github.com/zzz/android-vocab/actions/runs/123456789',
-            "checks=$((Get-AndroidVocabularyRequiredGitHubActionsChecks) -join ', ')"
-        )) {
+        foreach ($line in @(
+                'workflow=Android',
+                'conclusion=success',
+                'commitSha=0123456789abcdef0123456789abcdef01234567',
+                'serverUrl=https://github.com',
+                'repository=zzz/android-vocab',
+                'runId=123456789',
+                'runAttempt=2',
+                'runUrl=https://github.com/zzz/android-vocab/actions/runs/123456789',
+                "checks=$((Get-AndroidVocabularyRequiredGitHubActionsChecks) -join ', ')"
+            )) {
         Assert-ContainsLine -Lines $metadata -ExpectedLine $line
     }
 }
@@ -588,7 +737,7 @@ function Test-ReleaseReadinessPositiveFixture {
 
     $releaseArtifactsPath = Join-AndroidVocabularyPath $testRoot @('build', 'release-artifacts', 'release-artifacts-run.txt')
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $releaseArtifactsPath) | Out-Null
-    Write-Utf8NoBomLines -Path $releaseArtifactsPath -Lines @(
+    $successfulReleaseArtifactsMetadata = @(
         'runStatus=completed',
         'versionName=0.1.0',
         'versionCode=1',
@@ -597,12 +746,14 @@ function Test-ReleaseReadinessPositiveFixture {
         "releaseApkSha256=$releaseApkSha256",
         "releaseBundle=$releaseBundle",
         'releaseBundleStatus=verified',
-        "releaseBundleSha256=$releaseBundleSha256"
+        "releaseBundleSha256=$releaseBundleSha256",
+        'staleCurrentVersionArtifacts=<none>'
     )
+    Write-Utf8NoBomLines -Path $releaseArtifactsPath -Lines $successfulReleaseArtifactsMetadata
 
     $apkSmokePath = Join-AndroidVocabularyPath $testRoot @('build', 'apk-smoke', 'smoke-release-apk-run.txt')
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $apkSmokePath) | Out-Null
-    Write-Utf8NoBomLines -Path $apkSmokePath -Lines @(
+    $successfulApkSmokeMetadata = @(
         'runStatus=completed',
         'versionName=0.1.0',
         'versionCode=1',
@@ -610,12 +761,13 @@ function Test-ReleaseReadinessPositiveFixture {
         'apkPathMatchesCurrentVersionedName=True',
         "apkSha256=$releaseApkSha256"
     )
+    Write-Utf8NoBomLines -Path $apkSmokePath -Lines $successfulApkSmokeMetadata
 
     $deviceDir = Join-AndroidVocabularyPath $testRoot @('build', 'device-verification', 'v0.1.0-1-fixture')
     New-Item -ItemType Directory -Force -Path $deviceDir | Out-Null
     $deviceCompletedPath = Join-Path $deviceDir 'verification-completed.txt'
     $bundleSmokePath = Join-Path $deviceDir 'smoke-release-bundle-run.txt'
-    Write-Utf8NoBomLines -Path $bundleSmokePath -Lines @(
+    $successfulBundleSmokeMetadata = @(
         'runStatus=completed',
         'versionName=0.1.0',
         'versionCode=1',
@@ -624,7 +776,8 @@ function Test-ReleaseReadinessPositiveFixture {
         'apkSetSigning=release-signing',
         "bundleSha256=$releaseBundleSha256"
     )
-    Write-Utf8NoBomLines -Path $deviceCompletedPath -Lines @(
+    Write-Utf8NoBomLines -Path $bundleSmokePath -Lines $successfulBundleSmokeMetadata
+    $successfulDeviceVerificationMetadata = @(
         'runStatus=completed',
         'versionName=0.1.0',
         'versionCode=1',
@@ -638,6 +791,7 @@ function Test-ReleaseReadinessPositiveFixture {
         'bundleSmokeReleaseReady=True',
         'bundleSmokeApkSetSigning=release-signing'
     )
+    Write-Utf8NoBomLines -Path $deviceCompletedPath -Lines $successfulDeviceVerificationMetadata
 
     $fakeCommitSha = '0123456789abcdef0123456789abcdef01234567'
     $githubEvidencePath = Join-Path $testRoot 'github-actions-evidence.txt'
@@ -645,6 +799,8 @@ function Test-ReleaseReadinessPositiveFixture {
         'workflow=Android',
         'conclusion=success',
         "commitSha=$fakeCommitSha",
+        'serverUrl=https://github.com',
+        'repository=zzz/android-vocab',
         'runId=123456789',
         'runAttempt=2',
         'runUrl=https://github.com/zzz/android-vocab/actions/runs/123456789',
@@ -653,7 +809,9 @@ function Test-ReleaseReadinessPositiveFixture {
 
     $oldGitFunction = Get-Item -LiteralPath function:\git -ErrorAction SilentlyContinue
     $oldFakeGitSha = $env:ANDROID_VOCAB_TEST_GIT_SHA
+    $oldFakeGitStatus = $env:ANDROID_VOCAB_TEST_GIT_STATUS
     $env:ANDROID_VOCAB_TEST_GIT_SHA = $fakeCommitSha
+    $env:ANDROID_VOCAB_TEST_GIT_STATUS = ''
     Set-Item -LiteralPath function:\git -Value {
         param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
 
@@ -664,6 +822,16 @@ function Test-ReleaseReadinessPositiveFixture {
             $Arguments[3] -eq 'HEAD'
         ) {
             Write-Output $env:ANDROID_VOCAB_TEST_GIT_SHA
+            return
+        }
+        if (
+            $Arguments.Count -ge 4 -and
+            $Arguments[0] -eq '-C' -and
+            $Arguments[2] -eq 'status'
+        ) {
+            if (-not [string]::IsNullOrWhiteSpace($env:ANDROID_VOCAB_TEST_GIT_STATUS)) {
+                $env:ANDROID_VOCAB_TEST_GIT_STATUS -split '\|' | Write-Output
+            }
             return
         }
         throw "unsupported fake git args: $($Arguments -join ' ')"
@@ -685,6 +853,19 @@ function Test-ReleaseReadinessPositiveFixture {
         foreach ($line in @(
                 'runStatus=completed',
                 'failedRequirementNames=<none>',
+                'gitWorktreeStatus=clean',
+                'gitWorktreeDirtyCount=0',
+                'gitWorktreeDirtyEntries=<clean>',
+                'gitWorktreeRemediation=<none>',
+                'gitWorktreeClean=passed',
+                'blockerSummary=<none>',
+                'blockerActionSummary=<none>',
+                'releaseArtifactsRemediation=<none>',
+                'releaseArtifactsStaleCurrentVersionArtifacts=<none>',
+                'apkSmokeRemediation=<none>',
+                'deviceVerificationRemediation=<none>',
+                'deviceBundleSmokeArchiveRemediation=<none>',
+                'githubActionsRemediation=<none>',
                 'releaseArtifacts=passed',
                 'releaseApkSmoke=passed',
                 'deviceAabVerification=passed',
@@ -740,6 +921,193 @@ function Test-ReleaseReadinessPositiveFixture {
             )) {
             Assert-ContainsPattern -Lines $metadata -Pattern "^$([regex]::Escape($line))"
         }
+
+        $staleArtifactNames = 'AndroidVocabulary-release-v0.1.0-1.aab, AndroidVocabulary-release-v0.1.0-1.apk'
+        Write-Utf8NoBomLines -Path $releaseArtifactsPath -Lines @(
+            'runStatus=failed',
+            'versionName=0.1.0',
+            'versionCode=1',
+            "releaseApk=$releaseApk",
+            'releaseApkStatus=failed',
+            "releaseApkSha256=$releaseApkSha256",
+            "releaseBundle=$releaseBundle",
+            'releaseBundleStatus=failed',
+            "releaseBundleSha256=$releaseBundleSha256",
+            "staleCurrentVersionArtifacts=$staleArtifactNames",
+            'releaseArtifactsRemediation=Build signed APK/AAB without -AllowUnsigned, then run scripts/test/verify-release-artifacts.ps1.'
+        )
+        Invoke-ExpectedFailure `
+            -ExpectedPattern 'releaseArtifacts=failed' `
+            -Command {
+                & (Join-AndroidVocabularyPath $testRoot @('scripts', 'test', 'verify-release-readiness.ps1')) `
+                    -GitHubActionsEvidencePath $githubEvidencePath `
+                    -ReleaseArtifactsEvidencePath $releaseArtifactsPath `
+                    -ApkSmokeEvidencePath $apkSmokePath `
+                    -DeviceVerificationEvidencePath $deviceCompletedPath
+            }
+
+        Assert-UniqueKeyValueMetadata -Path $readinessMetadataPath
+        $metadata = Get-Content -LiteralPath $readinessMetadataPath
+        foreach ($line in @(
+                'runStatus=failed',
+                'failedRequirementNames=releaseArtifacts',
+                "releaseArtifactsStaleCurrentVersionArtifacts=$staleArtifactNames",
+                "blockerSummary=release artifacts stale: $staleArtifactNames",
+                'blockerActionSummary=replace stale release-named APK/AAB with a signed release build or archive them outside dist'
+            )) {
+            Assert-ContainsPattern -Lines $metadata -Pattern "^$([regex]::Escape($line))"
+        }
+        Assert-ContainsPattern `
+            -Lines $metadata `
+            -Pattern "^releaseArtifacts=failed\|.*staleCurrentVersionArtifacts=$([regex]::Escape($staleArtifactNames));remediation="
+        Assert-ContainsPattern `
+            -Lines $metadata `
+            -Pattern "^releaseArtifactsRemediation=.*Stale current-version release artifacts: $([regex]::Escape($staleArtifactNames))\."
+
+        Write-Utf8NoBomLines -Path $releaseArtifactsPath -Lines $successfulReleaseArtifactsMetadata
+
+        Write-Utf8NoBomLines -Path $releaseArtifactsPath -Lines @(
+            'runStatus=failed',
+            'versionName=0.1.0',
+            'versionCode=1',
+            "releaseApk=$releaseApk",
+            'releaseApkStatus=failed',
+            "releaseApkSha256=$releaseApkSha256",
+            "releaseBundle=$releaseBundle",
+            'releaseBundleStatus=failed',
+            "releaseBundleSha256=$releaseBundleSha256",
+            'staleCurrentVersionArtifacts=<none>',
+            'releaseArtifactsRemediation=Build signed APK/AAB without -AllowUnsigned, then run scripts/test/verify-release-artifacts.ps1.'
+        )
+        Write-Utf8NoBomLines -Path $apkSmokePath -Lines @(
+            'runStatus=failed',
+            'versionName=0.1.0',
+            'versionCode=1',
+            'skipInstall=False',
+            'apkPathMatchesCurrentVersionedName=False',
+            'apkSha256=0000000000000000000000000000000000000000000000000000000000000000'
+        )
+        Write-Utf8NoBomLines -Path $deviceCompletedPath -Lines @(
+            'runStatus=failed',
+            'versionName=0.1.0',
+            'versionCode=1',
+            'usesLocalOnlyReleaseOverrides=False',
+            'bundlePathMatchesCurrentVersionedName=False',
+            'bundleSha256=0000000000000000000000000000000000000000000000000000000000000000',
+            'bundleSmokeRunMetadata=smoke-release-bundle-run.txt',
+            'bundleSmokeRunStatus=failed',
+            'bundleSmokeBundleSha256=0000000000000000000000000000000000000000000000000000000000000000',
+            'bundleSmokeBundlePathMatchesCurrentVersionedName=False',
+            'bundleSmokeReleaseReady=False',
+            'bundleSmokeApkSetSigning=debug-signing'
+        )
+        Write-Utf8NoBomLines -Path $bundleSmokePath -Lines @(
+            'runStatus=failed',
+            'versionName=0.1.0',
+            'versionCode=1',
+            'bundlePathMatchesCurrentVersionedName=False',
+            'bundleSmokeReleaseReady=False',
+            'apkSetSigning=debug-signing',
+            'bundleSha256=0000000000000000000000000000000000000000000000000000000000000000'
+        )
+        Invoke-ExpectedFailure `
+            -ExpectedPattern 'releaseArtifacts=failed' `
+            -Command {
+                & (Join-AndroidVocabularyPath $testRoot @('scripts', 'test', 'verify-release-readiness.ps1')) `
+                    -GitHubActionsEvidencePath $githubEvidencePath `
+                    -ReleaseArtifactsEvidencePath $releaseArtifactsPath `
+                    -ApkSmokeEvidencePath $apkSmokePath `
+                    -DeviceVerificationEvidencePath $deviceCompletedPath
+            }
+
+        Assert-UniqueKeyValueMetadata -Path $readinessMetadataPath
+        $metadata = Get-Content -LiteralPath $readinessMetadataPath
+        foreach ($line in @(
+                'runStatus=failed',
+                'failedRequirementNames=releaseArtifacts, releaseApkSmoke, deviceAabVerification, deviceBundleSmokeArchive',
+                'blockerSummary=release artifacts missing, unsigned, or mismatched; release APK smoke evidence does not match current release APK; device AAB verification does not match current release bundle; device bundle smoke archive does not match current release bundle',
+                'blockerActionSummary=build signed release APK/AAB and rerun verify-release-artifacts.ps1; after release artifacts pass, rerun smoke-release-apk.ps1 against the current signed release APK; after release artifacts pass, rerun verify-device.ps1 with the current release AAB and keep verification-completed.txt; after verify-device.ps1 passes, keep smoke-release-bundle-run.txt beside the matching device verification archive'
+            )) {
+            Assert-ContainsPattern -Lines $metadata -Pattern "^$([regex]::Escape($line))"
+        }
+
+        Write-Utf8NoBomLines -Path $releaseArtifactsPath -Lines $successfulReleaseArtifactsMetadata
+        Write-Utf8NoBomLines -Path $apkSmokePath -Lines $successfulApkSmokeMetadata
+        Write-Utf8NoBomLines -Path $deviceCompletedPath -Lines $successfulDeviceVerificationMetadata
+        Write-Utf8NoBomLines -Path $bundleSmokePath -Lines $successfulBundleSmokeMetadata
+        Write-Utf8NoBomLines -Path $githubEvidencePath -Lines @(
+            'workflow=Android',
+            'conclusion=success',
+            "commitSha=$fakeCommitSha",
+            'serverUrl=https://github.com',
+            'repository=zzz/other-repo',
+            'runId=123456789',
+            'runAttempt=2',
+            'runUrl=https://github.com/zzz/android-vocab/actions/runs/123456789',
+            "checks=$((Get-AndroidVocabularyRequiredGitHubActionsChecks) -join ', ')"
+        )
+        Invoke-ExpectedFailure `
+            -ExpectedPattern 'githubActionsEvidence=failed' `
+            -Command {
+                & (Join-AndroidVocabularyPath $testRoot @('scripts', 'test', 'verify-release-readiness.ps1')) `
+                    -GitHubActionsEvidencePath $githubEvidencePath `
+                    -ReleaseArtifactsEvidencePath $releaseArtifactsPath `
+                    -ApkSmokeEvidencePath $apkSmokePath `
+                    -DeviceVerificationEvidencePath $deviceCompletedPath
+            }
+
+        Assert-UniqueKeyValueMetadata -Path $readinessMetadataPath
+        $metadata = Get-Content -LiteralPath $readinessMetadataPath
+        foreach ($line in @(
+                'runStatus=failed',
+                'failedRequirementNames=githubActionsEvidence',
+                'blockerSummary=GitHub Actions evidence does not match current HEAD',
+                'blockerActionSummary=download github-actions-release-evidence for the current HEAD',
+                'githubActionsServerUrl=https://github.com',
+                'githubActionsRepository=zzz/other-repo',
+                'githubActionsEvidence=failed'
+            )) {
+            Assert-ContainsPattern -Lines $metadata -Pattern "^$([regex]::Escape($line))"
+        }
+
+        Write-Utf8NoBomLines -Path $githubEvidencePath -Lines @(
+            'workflow=Android',
+            'conclusion=success',
+            "commitSha=$fakeCommitSha",
+            'serverUrl=https://github.com',
+            'repository=zzz/android-vocab',
+            'runId=123456789',
+            'runAttempt=2',
+            'runUrl=https://github.com/zzz/android-vocab/actions/runs/123456789',
+            "checks=$((Get-AndroidVocabularyRequiredGitHubActionsChecks) -join ', ')"
+        )
+
+        $env:ANDROID_VOCAB_TEST_GIT_STATUS = ' M README.md|?? app/proguard-rules.pro'
+        Invoke-ExpectedFailure `
+            -ExpectedPattern 'gitWorktreeClean=failed' `
+            -Command {
+                & (Join-AndroidVocabularyPath $testRoot @('scripts', 'test', 'verify-release-readiness.ps1')) `
+                    -GitHubActionsEvidencePath $githubEvidencePath `
+                    -ReleaseArtifactsEvidencePath $releaseArtifactsPath `
+                    -ApkSmokeEvidencePath $apkSmokePath `
+                    -DeviceVerificationEvidencePath $deviceCompletedPath
+            }
+        $env:ANDROID_VOCAB_TEST_GIT_STATUS = ''
+
+        Assert-UniqueKeyValueMetadata -Path $readinessMetadataPath
+        $metadata = Get-Content -LiteralPath $readinessMetadataPath
+        foreach ($line in @(
+                'runStatus=failed',
+                'failedRequirementNames=gitWorktreeClean',
+                'blockerSummary=git worktree dirty (2 entries)',
+                'blockerActionSummary=clean or stash the git worktree before final readiness',
+                'gitWorktreeStatus=dirty',
+                'gitWorktreeDirtyCount=2',
+                'gitWorktreeRemediation=Commit or stash',
+                'gitWorktreeClean=failed'
+            )) {
+            Assert-ContainsPattern -Lines $metadata -Pattern "^$([regex]::Escape($line))"
+        }
     } finally {
         if ($null -eq $oldGitFunction) {
             Remove-Item -LiteralPath function:\git -Force -ErrorAction SilentlyContinue
@@ -747,6 +1115,7 @@ function Test-ReleaseReadinessPositiveFixture {
             Set-Item -LiteralPath function:\git -Value $oldGitFunction.ScriptBlock
         }
         $env:ANDROID_VOCAB_TEST_GIT_SHA = $oldFakeGitSha
+        $env:ANDROID_VOCAB_TEST_GIT_STATUS = $oldFakeGitStatus
     }
 }
 
@@ -1005,8 +1374,10 @@ try {
     $fakeAndroidSdk = New-FakeAndroidSdk (Join-Path $tmpRoot 'fake-android-sdk')
 
     Test-PowerShellParse
+    Test-ReleaseManifestBackupPolicy
     Test-ReleaseArtifactNaming
     Test-ReleaseReadinessMetadataKeys
+    Test-ReleaseReadinessDocumentation
     Test-ReleaseReadinessPositiveFixture
     Test-VerifyDeviceFailureStageCases
     Test-BundleSmokeFailureStageCases

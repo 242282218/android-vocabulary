@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -27,6 +28,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class WordbookUiState(
+    val isLoading: Boolean = true,
     val settings: AppSettings = AppSettings(),
     val progress: List<BookProgress> = emptyList(),
     val query: String = "",
@@ -55,15 +57,16 @@ class WordbookViewModel
                 val settingsFlow = observeSettingsUseCase()
                 val filterFlow = combine(query, statusFilter) { rawQuery, filter -> rawQuery to filter }
                 val wordsFlow =
-                    combine(settingsFlow, query.debounce(300), statusFilter) { settings, rawQuery, filter ->
+                    combine(settingsFlow, query.debounce(300), statusFilter) { settings, _, filter ->
                         SearchRequest(
-                            query = rawQuery,
+                            query = query.value,
                             bookCodes = settings.selectedBooks,
                             statusFilter = filter,
                         )
-                    }.flatMapLatest { request ->
-                        searchWordsUseCase(request.query, request.bookCodes, request.statusFilter)
-                    }
+                    }.distinctUntilChanged()
+                        .flatMapLatest { request ->
+                            searchWordsUseCase(request.query, request.bookCodes, request.statusFilter)
+                        }
                 val detailFlow =
                     selectedWordId.flatMapLatest { wordId ->
                         wordId?.let(observeWordDetailUseCase::invoke) ?: flowOf(null)
@@ -76,6 +79,7 @@ class WordbookViewModel
                     detailFlow,
                 ) { settings, progress, filterState, words, detail ->
                     WordbookUiState(
+                        isLoading = false,
                         settings = settings,
                         progress = progress,
                         query = filterState.first,

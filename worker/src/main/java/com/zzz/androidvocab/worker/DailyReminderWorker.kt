@@ -25,15 +25,19 @@ class DailyReminderWorker
         @Assisted params: WorkerParameters,
     ) : CoroutineWorker(context, params) {
         override suspend fun doWork(): Result {
-            val channelId = "daily_review"
             val manager = applicationContext.getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(
-                NotificationChannel(channelId, "Daily review", NotificationManager.IMPORTANCE_DEFAULT),
+                NotificationChannel(
+                    NOTIFICATION_CHANNEL_ID,
+                    applicationContext.getString(R.string.notification_channel_daily_review),
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ),
             )
             val permissionGranted =
                 ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) ==
                     PackageManager.PERMISSION_GRANTED
-            if (!canPostNotifications(Build.VERSION.SDK_INT, permissionGranted)) {
+            val notificationsEnabled = NotificationManagerCompat.from(applicationContext).areNotificationsEnabled()
+            if (!canPostNotifications(Build.VERSION.SDK_INT, permissionGranted, notificationsEnabled)) {
                 return Result.success()
             }
             val launchIntent =
@@ -51,10 +55,10 @@ class DailyReminderWorker
                 )
             val notification =
                 NotificationCompat
-                    .Builder(applicationContext, channelId)
+                    .Builder(applicationContext, NOTIFICATION_CHANNEL_ID)
                     .setSmallIcon(R.drawable.ic_notification)
-                    .setContentTitle("该复习单词了")
-                    .setContentText("打开 Vocab 完成今天的复习。")
+                    .setContentTitle(applicationContext.getString(R.string.notification_daily_review_title))
+                    .setContentText(applicationContext.getString(R.string.notification_daily_review_text))
                     .setContentIntent(contentIntent)
                     .setAutoCancel(true)
                     .build()
@@ -70,6 +74,8 @@ class DailyReminderWorker
 internal fun canPostNotifications(
     sdkInt: Int,
     permissionGranted: Boolean,
-): Boolean = sdkInt < POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK || permissionGranted
+    notificationsEnabled: Boolean,
+): Boolean = notificationsEnabled && (sdkInt < POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK || permissionGranted)
 
 private const val POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK = 33
+private const val NOTIFICATION_CHANNEL_ID = "daily_review"

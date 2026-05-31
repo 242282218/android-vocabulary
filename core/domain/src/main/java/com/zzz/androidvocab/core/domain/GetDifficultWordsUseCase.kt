@@ -9,9 +9,14 @@ class GetDifficultWordsUseCase
     @Inject
     constructor(
         private val statsRepository: StatsRepository,
+        private val settingsRepository: SettingsRepository,
         private val clockProvider: ClockProvider,
     ) {
         @OptIn(ExperimentalCoroutinesApi::class)
         operator fun invoke(days: Int) =
-            clockProvider.observeNow().flatMapLatest { now -> statsRepository.observeDifficultWords(days, now) }
+            settingsRepository.settings.flatMapLatest { settings ->
+                clockProvider.observeNow().flatMapLatest { now ->
+                    statsRepository.observeDifficultWords(days, now, settings.selectedBooks)
+                }
+            }
     }

@@ -9,11 +9,14 @@ class GetStreakUseCase
     @Inject
     constructor(
         private val statsRepository: StatsRepository,
+        private val settingsRepository: SettingsRepository,
         private val clockProvider: ClockProvider,
     ) {
         @OptIn(ExperimentalCoroutinesApi::class)
         operator fun invoke() =
-            clockProvider.observeToday().flatMapLatest { today ->
-                statsRepository.observeStreakStats(today)
+            settingsRepository.settings.flatMapLatest { settings ->
+                clockProvider.observeToday().flatMapLatest { today ->
+                    statsRepository.observeStreakStats(today, settings.selectedBooks)
+                }
             }
     }

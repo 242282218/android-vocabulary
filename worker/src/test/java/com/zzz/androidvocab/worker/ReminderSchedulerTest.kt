@@ -27,13 +27,51 @@ class ReminderSchedulerTest {
     }
 
     @Test
+    fun nextDailyReminderDelayUsesCurrentMomentWhenReminderTimeMatchesNow() {
+        val now = LocalDateTime.parse("2026-05-16T20:15:00")
+
+        val delay = nextDailyReminderDelay(now, hour = 20, minute = 15)
+
+        assertEquals(Duration.ZERO, delay)
+    }
+
+    @Test
     fun canPostNotificationsBeforeAndroid13WithoutRuntimePermission() {
-        assertTrue(canPostNotifications(sdkInt = 32, permissionGranted = false))
+        assertTrue(
+            canPostNotifications(
+                sdkInt = 32,
+                permissionGranted = false,
+                notificationsEnabled = true,
+            ),
+        )
     }
 
     @Test
     fun canPostNotificationsOnAndroid13OnlyWhenRuntimePermissionGranted() {
-        assertFalse(canPostNotifications(sdkInt = 33, permissionGranted = false))
-        assertTrue(canPostNotifications(sdkInt = 33, permissionGranted = true))
+        assertFalse(
+            canPostNotifications(
+                sdkInt = 33,
+                permissionGranted = false,
+                notificationsEnabled = true,
+            ),
+        )
+        assertTrue(
+            canPostNotifications(
+                sdkInt = 33,
+                permissionGranted = true,
+                notificationsEnabled = true,
+            ),
+        )
+    }
+
+    @Test
+    fun canPostNotificationsReturnsFalseWhenAppNotificationsAreDisabled() {
+        assertFalse(
+            canPostNotifications(
+                sdkInt = 33,
+                permissionGranted = true,
+                notificationsEnabled = false,
+            ),
+        )
     }
 }

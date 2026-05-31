@@ -13,19 +13,37 @@ interface ReviewDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertCard(card: ReviewCardEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCards(cards: List<ReviewCardEntity>)
+
     @Update
     suspend fun updateCard(card: ReviewCardEntity)
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertLog(log: ReviewLogEntity)
 
+    @Update
+    suspend fun updateLog(log: ReviewLogEntity)
+
     @Query("SELECT * FROM review_cards WHERE id = :cardId")
     suspend fun getCard(cardId: String): ReviewCardEntity?
+
+    @Query(
+        """
+        SELECT * FROM review_cards
+        WHERE wordId = :wordId AND bookCode = :bookCode
+        LIMIT 1
+        """,
+    )
+    suspend fun getCardByWordAndBook(
+        wordId: String,
+        bookCode: String,
+    ): ReviewCardEntity?
 
     @Query("DELETE FROM review_cards WHERE id = :cardId")
     suspend fun deleteCard(cardId: String)
 
-    @Query("SELECT * FROM review_logs WHERE cardId = :cardId ORDER BY reviewedAt ASC")
+    @Query("SELECT * FROM review_logs WHERE cardId = :cardId ORDER BY reviewedAt ASC, id ASC")
     suspend fun getLogs(cardId: String): List<ReviewLogEntity>
 
     @Query(
@@ -36,6 +54,15 @@ interface ReviewDao {
         """,
     )
     suspend fun getCardIdsWithLogs(): List<String>
+
+    @Query(
+        """
+        SELECT l.*
+        FROM valid_review_logs l
+        ORDER BY l.bookCode ASC, l.wordId ASC, l.reviewedAt ASC, l.id ASC
+        """,
+    )
+    suspend fun getValidLogs(): List<ReviewLogEntity>
 
     @Query(
         """
@@ -59,6 +86,21 @@ interface ReviewDao {
         """,
     )
     suspend fun getCardIdsMissingCacheFromLogs(): List<String>
+
+    @Query(
+        """
+        SELECT l.*
+        FROM review_logs l
+        WHERE l.cardId IN (
+          SELECT DISTINCT vl.cardId
+          FROM valid_review_logs vl
+          LEFT JOIN review_cards c ON c.id = vl.cardId
+          WHERE c.id IS NULL
+        )
+        ORDER BY l.cardId ASC, l.reviewedAt ASC, l.id ASC
+        """,
+    )
+    suspend fun getLogsForMissingCacheCards(): List<ReviewLogEntity>
 
     @Query(
         """

@@ -9,10 +9,8 @@ import io.github.openspacedrepetition.Card
 import io.github.openspacedrepetition.Rating
 import io.github.openspacedrepetition.Scheduler
 import io.github.openspacedrepetition.State
-import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
-import java.util.zip.CRC32
 import javax.inject.Inject
 
 class FsrsKotlinReviewScheduler
@@ -35,7 +33,7 @@ class FsrsKotlinReviewScheduler
                         previous,
                         input.rating.toFsrsRating(),
                         input.reviewedAt,
-                        input.durationMs.toInt().coerceAtLeast(0),
+                        input.durationMs.toFsrsDurationMs(),
                     ).card()
             val scheduledDaysAfter = daysUntil(input.reviewedAt, reviewed.due, input.zoneId)
             val nextCard =
@@ -65,7 +63,7 @@ class FsrsKotlinReviewScheduler
                         retrievabilityBefore = beforeRetrievability ?: input.card.retrievability,
                         retrievabilityAfter = nextCard.retrievability,
                     ),
-                algorithmVersion = "java-fsrs-1.0.0",
+                algorithmVersion = FSRS_ALGORITHM_VERSION,
             )
         }
 
@@ -124,11 +122,7 @@ class FsrsKotlinReviewScheduler
                 .build()
         }
 
-        private fun stableCardIntId(value: String): Int {
-            val checksum = CRC32()
-            checksum.update(value.toByteArray(StandardCharsets.UTF_8))
-            return (checksum.value and Int.MAX_VALUE.toLong()).toInt()
-        }
+        private fun stableCardIntId(value: String): Int = value.hashCode() and Int.MAX_VALUE
 
         private fun ReviewRating.toFsrsRating(): Rating =
             when (this) {
@@ -147,3 +141,9 @@ class FsrsKotlinReviewScheduler
                 }
             }
     }
+
+private const val FSRS_ALGORITHM_VERSION = "java-fsrs-1.0.0"
+private const val MIN_DURATION_MS = 0
+private const val MAX_DURATION_MS = Int.MAX_VALUE
+
+internal fun Long.toFsrsDurationMs(): Int = coerceIn(MIN_DURATION_MS.toLong(), MAX_DURATION_MS.toLong()).toInt()

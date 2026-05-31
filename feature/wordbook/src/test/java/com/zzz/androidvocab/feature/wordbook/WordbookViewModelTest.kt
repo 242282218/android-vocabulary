@@ -47,6 +47,30 @@ class WordbookViewModelTest {
     }
 
     @Test
+    fun initialStateShowsLoadingUntilWordbookDataEmits() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val vocabularyRepository = FakeVocabularyRepository()
+            val settingsRepository = FakeSettingsRepository()
+            val viewModel = viewModel(vocabularyRepository, settingsRepository)
+
+            assertEquals(true, viewModel.uiState.value.isLoading)
+
+            val collectionJob =
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.collect()
+                }
+            advanceTimeBy(300)
+            runCurrent()
+
+            val loadedState = viewModel.uiState.first { !it.isLoading }
+            assertEquals(false, loadedState.isLoading)
+            assertEquals(listOf(word()), loadedState.words)
+            collectionJob.cancel()
+        }
+
+    @Test
     fun filterChangesClearSelectedWordDetail() =
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)
@@ -95,13 +119,216 @@ class WordbookViewModelTest {
             collectionJob.cancel()
         }
 
+    @Test
+    fun searchUsesDebouncedLatestQuery() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val vocabularyRepository = FakeVocabularyRepository()
+            val settingsRepository = FakeSettingsRepository()
+            val viewModel = viewModel(vocabularyRepository, settingsRepository)
+            val collectionJob =
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.collect()
+                }
+            advanceTimeBy(300)
+            runCurrent()
+            vocabularyRepository.searchQueries.clear()
+
+            viewModel.updateQuery("a")
+            advanceTimeBy(100)
+            viewModel.updateQuery("ab")
+            advanceTimeBy(299)
+            runCurrent()
+            assertEquals(emptyList<String>(), vocabularyRepository.searchQueries)
+
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(listOf("ab"), vocabularyRepository.searchQueries)
+            collectionJob.cancel()
+        }
+
+    @Test
+    fun selectedBookChangesRefreshSearchImmediately() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val vocabularyRepository = FakeVocabularyRepository()
+            val settingsRepository = FakeSettingsRepository()
+            val viewModel = viewModel(vocabularyRepository, settingsRepository)
+            val collectionJob =
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.collect()
+                }
+            advanceTimeBy(300)
+            runCurrent()
+
+            viewModel.updateQuery("ab")
+            advanceTimeBy(300)
+            runCurrent()
+            vocabularyRepository.searchBookCodes.clear()
+
+            viewModel.toggleBook(BookCode.CET6)
+            runCurrent()
+
+            assertEquals(listOf(setOf(BookCode.CET4, BookCode.CET6)), vocabularyRepository.searchBookCodes)
+            collectionJob.cancel()
+        }
+
+    @Test
+    fun selectedBookChangeUsesPendingLatestQueryImmediately() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val vocabularyRepository = FakeVocabularyRepository()
+            val settingsRepository = FakeSettingsRepository()
+            val viewModel = viewModel(vocabularyRepository, settingsRepository)
+            val collectionJob =
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.collect()
+                }
+            advanceTimeBy(300)
+            runCurrent()
+            vocabularyRepository.searchQueries.clear()
+            vocabularyRepository.searchBookCodes.clear()
+
+            viewModel.updateQuery("ab")
+            advanceTimeBy(100)
+            viewModel.toggleBook(BookCode.CET6)
+            runCurrent()
+
+            assertEquals(listOf("ab"), vocabularyRepository.searchQueries)
+            assertEquals(listOf(setOf(BookCode.CET4, BookCode.CET6)), vocabularyRepository.searchBookCodes)
+
+            advanceTimeBy(200)
+            runCurrent()
+            assertEquals(listOf("ab"), vocabularyRepository.searchQueries)
+            collectionJob.cancel()
+        }
+
+    @Test
+    fun statusFilterChangesRefreshSearchImmediately() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val vocabularyRepository = FakeVocabularyRepository()
+            val settingsRepository = FakeSettingsRepository()
+            val viewModel = viewModel(vocabularyRepository, settingsRepository)
+            val collectionJob =
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.collect()
+                }
+            advanceTimeBy(300)
+            runCurrent()
+
+            viewModel.updateQuery("ab")
+            advanceTimeBy(300)
+            runCurrent()
+            vocabularyRepository.searchStatusFilters.clear()
+
+            viewModel.updateStatusFilter(WordStatusFilter.Mastered)
+            runCurrent()
+
+            assertEquals(listOf(WordStatusFilter.Mastered), vocabularyRepository.searchStatusFilters)
+            collectionJob.cancel()
+        }
+
+    @Test
+    fun statusFilterChangeUsesPendingLatestQueryImmediately() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val vocabularyRepository = FakeVocabularyRepository()
+            val settingsRepository = FakeSettingsRepository()
+            val viewModel = viewModel(vocabularyRepository, settingsRepository)
+            val collectionJob =
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.collect()
+                }
+            advanceTimeBy(300)
+            runCurrent()
+            vocabularyRepository.searchQueries.clear()
+            vocabularyRepository.searchStatusFilters.clear()
+
+            viewModel.updateQuery("ab")
+            advanceTimeBy(100)
+            viewModel.updateStatusFilter(WordStatusFilter.Mastered)
+            runCurrent()
+
+            assertEquals(listOf("ab"), vocabularyRepository.searchQueries)
+            assertEquals(listOf(WordStatusFilter.Mastered), vocabularyRepository.searchStatusFilters)
+
+            advanceTimeBy(200)
+            runCurrent()
+            assertEquals(listOf("ab"), vocabularyRepository.searchQueries)
+            collectionJob.cancel()
+        }
+
+    @Test
+    fun clearingQueryAndStatusFilterSearchesEmptyQueryImmediately() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val vocabularyRepository = FakeVocabularyRepository()
+            val settingsRepository = FakeSettingsRepository()
+            val viewModel = viewModel(vocabularyRepository, settingsRepository)
+            val collectionJob =
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.collect()
+                }
+            advanceTimeBy(300)
+            runCurrent()
+            viewModel.updateQuery("ab")
+            advanceTimeBy(300)
+            runCurrent()
+            viewModel.updateStatusFilter(WordStatusFilter.Mastered)
+            runCurrent()
+            vocabularyRepository.searchQueries.clear()
+            vocabularyRepository.searchStatusFilters.clear()
+
+            viewModel.updateQuery("")
+            viewModel.updateStatusFilter(WordStatusFilter.All)
+            runCurrent()
+
+            assertEquals(listOf(""), vocabularyRepository.searchQueries)
+            assertEquals(listOf(WordStatusFilter.All), vocabularyRepository.searchStatusFilters)
+
+            advanceTimeBy(300)
+            runCurrent()
+            assertEquals(listOf(""), vocabularyRepository.searchQueries)
+            collectionJob.cancel()
+        }
+
+    @Test
+    fun toggleLastSelectedBookKeepsOneBookSelected() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val vocabularyRepository = FakeVocabularyRepository()
+            val settingsRepository = FakeSettingsRepository()
+            val viewModel = viewModel(vocabularyRepository, settingsRepository)
+            val collectionJob =
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.collect()
+                }
+            advanceTimeBy(300)
+            runCurrent()
+
+            viewModel.toggleBook(BookCode.CET4)
+            runCurrent()
+
+            val state = viewModel.uiState.first { !it.isLoading }
+            assertEquals(setOf(BookCode.CET4), state.settings.selectedBooks)
+            collectionJob.cancel()
+        }
+
     private fun viewModel(
         vocabularyRepository: VocabularyRepository,
         settingsRepository: SettingsRepository,
     ): WordbookViewModel {
         val clock = FixedClock()
         return WordbookViewModel(
-            getBookProgressUseCase = GetBookProgressUseCase(vocabularyRepository, clock),
+            getBookProgressUseCase = GetBookProgressUseCase(vocabularyRepository, settingsRepository, clock),
             observeSettingsUseCase = ObserveSettingsUseCase(settingsRepository),
             observeWordDetailUseCase = ObserveWordDetailUseCase(vocabularyRepository),
             updateSettingsUseCase = UpdateSettingsUseCase(settingsRepository),
@@ -111,6 +338,10 @@ class WordbookViewModelTest {
 }
 
 private class FakeVocabularyRepository : VocabularyRepository {
+    val searchQueries = mutableListOf<String>()
+    val searchBookCodes = mutableListOf<Set<BookCode>>()
+    val searchStatusFilters = mutableListOf<WordStatusFilter>()
+
     override fun observeBookProgress(now: Instant): Flow<List<BookProgress>> = flowOf(emptyList())
 
     override fun searchWords(
@@ -118,7 +349,12 @@ private class FakeVocabularyRepository : VocabularyRepository {
         bookCodes: Set<BookCode>,
         statusFilter: WordStatusFilter,
         now: Instant,
-    ): Flow<List<WordEntry>> = flowOf(listOf(word()))
+    ): Flow<List<WordEntry>> {
+        searchQueries += query
+        searchBookCodes += bookCodes
+        searchStatusFilters += statusFilter
+        return flowOf(listOf(word()))
+    }
 
     override fun observeWordDetail(wordId: String): Flow<WordDetail?> =
         flowOf(WordDetail(entry = word(wordId), memberships = emptyList(), aliases = emptyList()))
@@ -143,8 +379,10 @@ private class FakeSettingsRepository : SettingsRepository {
         settings.value =
             settings.value.copy(
                 selectedBooks =
-                    if (bookCode in selected) {
+                    if (bookCode in selected && selected.size > 1) {
                         selected - bookCode
+                    } else if (bookCode in selected) {
+                        selected
                     } else {
                         selected + bookCode
                     },

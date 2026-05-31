@@ -1,6 +1,7 @@
 package com.zzz.androidvocab.core.database
 
 import androidx.room.testing.MigrationTestHelper
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
@@ -414,7 +415,284 @@ class VocabDatabaseMigrationTest {
     }
 
     @Test
-    fun migratesVersionOneToFive() {
+    fun migratesVersionFiveToSix() {
+        helper
+            .createDatabase(TEST_DATABASE, 5)
+            .apply {
+                execSQL(
+                    """
+                    INSERT INTO word_entries (
+                        id,
+                        word,
+                        meaning,
+                        phonetic,
+                        partOfSpeech,
+                        definition,
+                        cefrLevel,
+                        cefrRank,
+                        frequency,
+                        sourceFlagsJson,
+                        coverageTier,
+                        createdAt,
+                        updatedAt
+                    ) VALUES (
+                        'word-access',
+                        'access',
+                        '入口；通道',
+                        NULL,
+                        NULL,
+                        NULL,
+                        'A1',
+                        1.0,
+                        0.42,
+                        '[]',
+                        NULL,
+                        '2026-05-16T00:00:00Z',
+                        '2026-05-16T00:00:00Z'
+                    )
+                    """.trimIndent(),
+                )
+                execSQL(
+                    """
+                    INSERT INTO wordbook_memberships (
+                        wordId,
+                        bookCode,
+                        orderIndex,
+                        examFrequencyScore,
+                        examPriorityScore,
+                        isPhraseBacked,
+                        phraseCount
+                    ) VALUES (
+                        'word-access',
+                        'CET4',
+                        1,
+                        0.7,
+                        0.8,
+                        0,
+                        0
+                    )
+                    """.trimIndent(),
+                )
+                execSQL(
+                    """
+                    INSERT INTO review_logs (
+                        id,
+                        cardId,
+                        wordId,
+                        bookCode,
+                        rating,
+                        reviewedAt,
+                        localDay,
+                        elapsedDays,
+                        scheduledDaysBefore,
+                        scheduledDaysAfter,
+                        difficultyBefore,
+                        difficultyAfter,
+                        stabilityBefore,
+                        stabilityAfter,
+                        retrievabilityBefore,
+                        retrievabilityAfter,
+                        durationMs,
+                        targetRetention,
+                        algorithm,
+                        algorithmVersion,
+                        stateAfter,
+                        dueAtAfter
+                    ) VALUES (
+                        'log-1',
+                        'card|CET4|word-access',
+                        'word-access',
+                        'CET4',
+                        'good',
+                        '2026-05-16T00:00:00Z',
+                        '2026-05-16',
+                        0,
+                        0,
+                        3,
+                        NULL,
+                        5.0,
+                        NULL,
+                        3.0,
+                        NULL,
+                        0.9,
+                        500,
+                        0.9,
+                        'fsrs',
+                        'test',
+                        'Review',
+                        '2026-05-19T00:00:00Z'
+                    )
+                    """.trimIndent(),
+                )
+                close()
+            }
+
+        helper
+            .runMigrationsAndValidate(TEST_DATABASE, 6, true, MIGRATION_5_6)
+            .apply {
+                query(
+                    "SELECT firstReviewedAt FROM first_reviews WHERE cardId = 'card|CET4|word-access'",
+                ).use { cursor ->
+                    cursor.moveToFirst()
+                    assertEquals("2026-05-16T00:00:00Z", cursor.getString(0))
+                }
+                close()
+            }
+    }
+
+    @Test
+    fun migratesVersionSixToSeven() {
+        helper
+            .createDatabase(TEST_DATABASE, 6)
+            .apply {
+                seedVersionSixDailyStatsRows()
+                close()
+            }
+
+        helper
+            .runMigrationsAndValidate(TEST_DATABASE, 7, true, MIGRATION_6_7)
+            .apply {
+                query(
+                    """
+                    SELECT newCount, reviewCount, completedCount, goodCount, againCount, estimatedMinutes
+                    FROM review_daily_stats
+                    WHERE localDay = '2026-05-16'
+                    """.trimIndent(),
+                ).use { cursor ->
+                    cursor.moveToFirst()
+                    assertEquals(1, cursor.getInt(0))
+                    assertEquals(1, cursor.getInt(1))
+                    assertEquals(2, cursor.getInt(2))
+                    assertEquals(1, cursor.getInt(3))
+                    assertEquals(1, cursor.getInt(4))
+                    assertEquals(2, cursor.getInt(5))
+                }
+                close()
+            }
+    }
+
+    @Test
+    fun migratesVersionSevenToEight() {
+        helper
+            .createDatabase(TEST_DATABASE, 7)
+            .apply {
+                seedVersionSixDailyStatsRows()
+                close()
+            }
+
+        helper
+            .runMigrationsAndValidate(TEST_DATABASE, 8, true, MIGRATION_7_8)
+            .apply {
+                query(
+                    """
+                    SELECT durationMs, estimatedMinutes
+                    FROM review_daily_stats
+                    WHERE localDay = '2026-05-16'
+                    """.trimIndent(),
+                ).use { cursor ->
+                    cursor.moveToFirst()
+                    assertEquals(61000, cursor.getInt(0))
+                    assertEquals(2, cursor.getInt(1))
+                }
+                close()
+            }
+    }
+
+    @Test
+    fun migratesVersionEightToNine() {
+        helper
+            .createDatabase(TEST_DATABASE, 8)
+            .apply {
+                seedVersionSixDailyStatsRows()
+                insertVersionSixReviewLog(
+                    id = "log-alpha",
+                    rating = "hard",
+                    reviewedAt = "2026-05-16T08:00:00Z",
+                    durationMs = 10000,
+                )
+                close()
+            }
+
+        helper
+            .runMigrationsAndValidate(TEST_DATABASE, 9, true, MIGRATION_8_9)
+            .apply {
+                query(
+                    """
+                    SELECT firstLogId, firstReviewedAt
+                    FROM first_reviews
+                    WHERE cardId = 'card|CET4|word-access'
+                    """.trimIndent(),
+                ).use { cursor ->
+                    cursor.moveToFirst()
+                    assertEquals("log-alpha", cursor.getString(0))
+                    assertEquals("2026-05-16T08:00:00Z", cursor.getString(1))
+                }
+                query(
+                    """
+                    SELECT newCount, reviewCount, completedCount, durationMs
+                    FROM review_daily_stats
+                    WHERE localDay = '2026-05-16'
+                    """.trimIndent(),
+                ).use { cursor ->
+                    cursor.moveToFirst()
+                    assertEquals(1, cursor.getInt(0))
+                    assertEquals(2, cursor.getInt(1))
+                    assertEquals(3, cursor.getInt(2))
+                    assertEquals(71000, cursor.getInt(3))
+                }
+                close()
+            }
+    }
+
+    @Test
+    fun migratesVersionNineToTen() {
+        helper
+            .createDatabase(TEST_DATABASE, 9)
+            .apply {
+                seedVersionSixDailyStatsRows()
+                insertVersionSixReviewLog(
+                    id = "log-broken-card-id",
+                    cardId = "broken-card-id",
+                    rating = "hard",
+                    reviewedAt = "2026-05-16T10:00:00Z",
+                    durationMs = 20000,
+                )
+                close()
+            }
+
+        helper
+            .runMigrationsAndValidate(TEST_DATABASE, 10, true, MIGRATION_9_10)
+            .apply {
+                query(
+                    """
+                    SELECT firstLogId, firstReviewedAt
+                    FROM first_reviews
+                    WHERE cardId = 'CET4|word-access'
+                    """.trimIndent(),
+                ).use { cursor ->
+                    cursor.moveToFirst()
+                    assertEquals("log-first", cursor.getString(0))
+                    assertEquals("2026-05-16T08:00:00Z", cursor.getString(1))
+                }
+                query(
+                    """
+                    SELECT newCount, reviewCount, completedCount, hardCount
+                    FROM review_daily_stats
+                    WHERE localDay = '2026-05-16'
+                    """.trimIndent(),
+                ).use { cursor ->
+                    cursor.moveToFirst()
+                    assertEquals(1, cursor.getInt(0))
+                    assertEquals(2, cursor.getInt(1))
+                    assertEquals(3, cursor.getInt(2))
+                    assertEquals(1, cursor.getInt(3))
+                }
+                close()
+            }
+    }
+
+    @Test
+    fun migratesVersionOneToTen() {
         helper
             .createDatabase(TEST_DATABASE, 1)
             .apply {
@@ -583,12 +861,17 @@ class VocabDatabaseMigrationTest {
         helper
             .runMigrationsAndValidate(
                 TEST_DATABASE,
-                5,
+                10,
                 true,
                 MIGRATION_1_2,
                 MIGRATION_2_3,
                 MIGRATION_3_4,
                 MIGRATION_4_5,
+                MIGRATION_5_6,
+                MIGRATION_6_7,
+                MIGRATION_7_8,
+                MIGRATION_8_9,
+                MIGRATION_9_10,
             ).apply {
                 query("SELECT cefrRank FROM word_entries WHERE id = 'word-access'").use { cursor ->
                     cursor.moveToFirst()
@@ -608,12 +891,31 @@ class VocabDatabaseMigrationTest {
                     assertEquals(1, cursor.getInt(0))
                 }
                 query(
+                    """
+                    SELECT firstLogId, firstReviewedAt
+                    FROM first_reviews
+                    WHERE cardId = 'CET4|word-access'
+                    """.trimIndent(),
+                ).use { cursor ->
+                    cursor.moveToFirst()
+                    assertEquals("log-1", cursor.getString(0))
+                    assertEquals("2026-05-16T00:00:00Z", cursor.getString(1))
+                }
+                query(
                     "SELECT word, state, scheduledDays FROM word_card_view WHERE wordId = 'word-access'",
                 ).use { cursor ->
                     cursor.moveToFirst()
                     assertEquals("access", cursor.getString(0))
                     assertEquals("Review", cursor.getString(1))
                     assertEquals(3, cursor.getInt(2))
+                }
+                query(
+                    "SELECT newCount, completedCount, durationMs FROM review_daily_stats WHERE localDay = '2026-05-16'",
+                ).use { cursor ->
+                    cursor.moveToFirst()
+                    assertEquals(1, cursor.getInt(0))
+                    assertEquals(1, cursor.getInt(1))
+                    assertEquals(500, cursor.getInt(2))
                 }
                 close()
             }
@@ -622,4 +924,133 @@ class VocabDatabaseMigrationTest {
     private companion object {
         const val TEST_DATABASE = "vocab-migration-test"
     }
+}
+
+private fun SupportSQLiteDatabase.seedVersionSixDailyStatsRows() {
+    execSQL(
+        """
+        INSERT INTO word_entries (
+            id,
+            word,
+            meaning,
+            phonetic,
+            partOfSpeech,
+            definition,
+            cefrLevel,
+            cefrRank,
+            frequency,
+            sourceFlagsJson,
+            coverageTier,
+            createdAt,
+            updatedAt
+        ) VALUES (
+            'word-access',
+            'access',
+            '入口；通道',
+            NULL,
+            NULL,
+            NULL,
+            'A1',
+            1.0,
+            0.42,
+            '[]',
+            NULL,
+            '2026-05-16T00:00:00Z',
+            '2026-05-16T00:00:00Z'
+        )
+        """.trimIndent(),
+    )
+    execSQL(
+        """
+        INSERT INTO wordbook_memberships (
+            wordId,
+            bookCode,
+            orderIndex,
+            examFrequencyScore,
+            examPriorityScore,
+            isPhraseBacked,
+            phraseCount
+        ) VALUES (
+            'word-access',
+            'CET4',
+            1,
+            0.7,
+            0.8,
+            0,
+            0
+        )
+        """.trimIndent(),
+    )
+    insertVersionSixReviewLog(
+        id = "log-first",
+        rating = "good",
+        reviewedAt = "2026-05-16T08:00:00Z",
+        durationMs = 30000,
+    )
+    insertVersionSixReviewLog(
+        id = "log-second",
+        rating = "again",
+        reviewedAt = "2026-05-16T09:00:00Z",
+        durationMs = 31000,
+    )
+}
+
+private fun SupportSQLiteDatabase.insertVersionSixReviewLog(
+    id: String,
+    cardId: String = "card|CET4|word-access",
+    rating: String,
+    reviewedAt: String,
+    durationMs: Int,
+) {
+    execSQL(
+        """
+        INSERT INTO review_logs (
+            id,
+            cardId,
+            wordId,
+            bookCode,
+            rating,
+            reviewedAt,
+            localDay,
+            elapsedDays,
+            scheduledDaysBefore,
+            scheduledDaysAfter,
+            difficultyBefore,
+            difficultyAfter,
+            stabilityBefore,
+            stabilityAfter,
+            retrievabilityBefore,
+            retrievabilityAfter,
+            durationMs,
+            targetRetention,
+            algorithm,
+            algorithmVersion,
+            stateAfter,
+            dueAtAfter
+        ) VALUES (
+            '$id',
+            '$cardId',
+            'word-access',
+            'CET4',
+            '$rating',
+            '$reviewedAt',
+            '2026-05-16',
+            0,
+            0,
+            1,
+            NULL,
+            5.0,
+            NULL,
+            1.0,
+            NULL,
+            0.9,
+            $durationMs,
+            0.9,
+            'fsrs',
+            'test',
+            'Review',
+            '2026-05-17T00:00:00Z'
+        )
+        """.trimIndent(),
+    )
 }

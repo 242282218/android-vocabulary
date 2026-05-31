@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,9 +38,11 @@ import com.zzz.androidvocab.core.designsystem.VocabPageHeader
 import com.zzz.androidvocab.core.designsystem.VocabScreen
 import com.zzz.androidvocab.core.designsystem.VocabSparkline
 import com.zzz.androidvocab.core.designsystem.WarmHeroCard
+import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.BookProgress
 import com.zzz.androidvocab.core.model.DailyActivity
 import com.zzz.androidvocab.core.model.DailyReviewLoad
+import com.zzz.androidvocab.core.model.DifficultWord
 
 @Composable
 fun StatsRoute(viewModel: StatsViewModel = hiltViewModel()) {
@@ -54,55 +58,97 @@ fun StatsScreen(uiState: StatsUiState) {
             title = "统计",
             subtitle = "复盘学习节奏，提前看见未来的复习压力。",
         )
+        if (uiState.isLoading) {
+            StatsLoadingCard()
+            return@VocabScreen
+        }
         StatsSnapshotCard(uiState)
         VocabCard {
-            SectionTitle("近 7 天复习趋势")
+            SectionTitle("复习趋势", detail = uiState.selectedBooks.windowScopeLabel("7 天"))
             ActivityTrend(uiState.activity.takeLast(7))
         }
         VocabCard {
-            SectionTitle("月历热力图")
+            SectionTitle("月历热力图", detail = uiState.selectedBooks.windowScopeLabel("35 天"))
             ActivityHeatmap(uiState.activity)
         }
         VocabCard {
-            SectionTitle("未来 30 天复习负载")
-            ReviewLoadChart(uiState.load)
+            SectionTitle("未来负载", detail = uiState.selectedBooks.windowScopeLabel("30 天"))
+            ReviewLoadChart(uiState.load, uiState.selectedBooks.scopeLabel())
         }
         VocabCard {
-            SectionTitle("掌握分布")
+            SectionTitle("掌握分布", detail = uiState.selectedBooks.scopeLabel())
             MasteryDistribution(uiState.progress)
         }
         VocabCard {
-            SectionTitle("词书进度")
+            SectionTitle("词书进度", detail = uiState.selectedBooks.scopeLabel())
             uiState.progress.forEach { BookProgressRow(it) }
         }
-        VocabCard {
-            SectionTitle("困难词 Top 10")
-            if (uiState.difficultWords.isEmpty()) {
-                VocabEmptyState(
-                    title = "暂无困难词",
-                    body = "继续复习后，这里会按 again / hard 频率显示最需要巩固的词。",
-                )
-            }
-            uiState.difficultWords.forEach {
-                Row(
+        DifficultWordsCard(uiState.difficultWords, uiState.selectedBooks.windowScopeLabel("30 天"))
+    }
+}
+
+@Composable
+private fun StatsLoadingCard() {
+    VocabCard {
+        VocabEmptyState(
+            title = "正在加载统计",
+            body = "正在从本地复习记录汇总趋势、负载和困难词。",
+        )
+        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+    }
+}
+
+@Composable
+private fun StatsSnapshotCard(uiState: StatsUiState) {
+    val activeDaysLabel = "${uiState.streak.activeDays.size}"
+    WarmHeroCard {
+        SectionTitle("连续学习", detail = uiState.selectedBooks.scopeLabel())
+        Text(
+            "当前连续 ${uiState.streak.currentStreak} 天，" +
+                "近 30 天平均记忆保持 ${(uiState.retention.averageRetrievability * 100).toInt()}%。",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Medium,
+        )
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            if (maxWidth < 380.dp) {
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(it.word.word, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        Text(
-                            it.word.meaning,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Text(
-                        "${it.difficultyScore.toInt()}",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.error,
+                    MetricBlock(
+                        "年内最长",
+                        uiState.streak.maxStreak.toString(),
+                        modifier = Modifier.fillMaxWidth(),
+                        valueColor = MaterialTheme.colorScheme.primary,
+                    )
+                    MetricBlock(
+                        "年内活跃",
+                        activeDaysLabel,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    MetricBlock(
+                        "30天 P50",
+                        "${(uiState.retention.p50Retrievability * 100).toInt()}%",
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(18.dp), modifier = Modifier.fillMaxWidth()) {
+                    MetricBlock(
+                        "年内最长",
+                        uiState.streak.maxStreak.toString(),
+                        Modifier.weight(1f),
+                        valueColor = MaterialTheme.colorScheme.primary,
+                    )
+                    MetricBlock(
+                        "年内活跃",
+                        activeDaysLabel,
+                        Modifier.weight(1f),
+                    )
+                    MetricBlock(
+                        "30天 P50",
+                        "${(uiState.retention.p50Retrievability * 100).toInt()}%",
+                        Modifier.weight(1f),
                     )
                 }
             }
@@ -111,33 +157,44 @@ fun StatsScreen(uiState: StatsUiState) {
 }
 
 @Composable
-private fun StatsSnapshotCard(uiState: StatsUiState) {
-    WarmHeroCard {
-        SectionTitle("连续学习", detail = "最近 30 天")
-        Text(
-            "当前连续 ${uiState.streak.currentStreak} 天，平均记忆保持 ${(uiState.retention.averageRetrievability * 100).toInt()}%。",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Medium,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(18.dp), modifier = Modifier.fillMaxWidth()) {
-            MetricBlock(
-                "最长",
-                uiState.streak.maxStreak.toString(),
-                Modifier.weight(1f),
-                valueColor = MaterialTheme.colorScheme.primary,
-            )
-            MetricBlock(
-                "活跃",
-                uiState.streak.activeDays.size
-                    .toString(),
-                Modifier.weight(1f),
-            )
-            MetricBlock(
-                "P50",
-                "${(uiState.retention.p50Retrievability * 100).toInt()}%",
-                Modifier.weight(1f),
+private fun DifficultWordsCard(
+    words: List<DifficultWord>,
+    scopeLabel: String,
+) {
+    VocabCard {
+        SectionTitle("困难词", detail = scopeLabel)
+        if (words.isEmpty()) {
+            VocabEmptyState(
+                title = "暂无困难词",
+                body = "继续复习后，这里会按 again / hard 频率显示最需要巩固的词。",
             )
         }
+        words.forEach { DifficultWordRow(it) }
+    }
+}
+
+@Composable
+private fun DifficultWordRow(item: DifficultWord) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(item.word.word, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(
+                item.word.meaning,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            "${item.difficultyScore.toInt()}",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.error,
+        )
     }
 }
 
@@ -157,18 +214,36 @@ private fun ActivityTrend(activity: List<DailyActivity>) {
 }
 
 @Composable
-private fun ReviewLoadChart(load: List<DailyReviewLoad>) {
+private fun ReviewLoadChart(
+    load: List<DailyReviewLoad>,
+    scopeLabel: String,
+) {
     if (load.isEmpty()) {
-        VocabEmptyState(title = "暂无负载", body = "复习卡片产生到期时间后，会显示未来 30 天负载。")
+        VocabEmptyState(title = "暂无负载", body = "当前词书：$scopeLabel。暂无未来 30 天到期词。")
         return
     }
     MiniReviewLoadChart(load = load, maxBars = 30, height = 118.dp)
     Text(
-        "未来到期词数，今天是最左侧。高峰前提前复习能削平压力。",
+        "当前词书：$scopeLabel。未来到期词数，今天是最左侧。高峰前提前复习能削平压力。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
+
+private fun List<BookCode>.scopeLabel(): String =
+    when (val orderedBooks = sortedBy { BookCode.entries.indexOf(it) }) {
+        emptyList<BookCode>() -> ALL_BOOKS_SCOPE_LABEL
+        else ->
+            when {
+                orderedBooks.size == 1 -> orderedBooks.single().displayName
+                orderedBooks.size == 2 -> orderedBooks.joinToString("、") { it.displayName }
+                else -> "${orderedBooks[0].displayName}、${orderedBooks[1].displayName}等${orderedBooks.size}本"
+            }
+    }
+
+private const val ALL_BOOKS_SCOPE_LABEL = "全部词书"
+
+private fun List<BookCode>.windowScopeLabel(window: String): String = "$window · ${scopeLabel()}"
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -217,6 +292,7 @@ private fun MasteryDistribution(progress: List<BookProgress>) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BookProgressRow(progress: BookProgress) {
     val fraction =
@@ -241,11 +317,23 @@ private fun BookProgressRow(progress: BookProgress) {
                 MaterialTheme.colorScheme.surfaceVariant,
             )
         }
-        Text(
-            "${progress.learnedCount}/${progress.totalCount}  待复习 ${progress.dueCount}  掌握 ${progress.masteredCount}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            TinyLegend(
+                label = "已学 ${progress.learnedCount}/${progress.totalCount}",
+                color = MaterialTheme.colorScheme.primary,
+            )
+            TinyLegend(
+                label = "待复习 ${progress.dueCount}",
+                color = MaterialTheme.colorScheme.surfaceVariant,
+            )
+            TinyLegend(
+                label = "掌握 ${progress.masteredCount}",
+                color = VocabColors.Success,
+            )
+        }
     }
 }
 

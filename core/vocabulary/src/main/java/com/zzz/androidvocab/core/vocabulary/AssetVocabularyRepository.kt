@@ -27,6 +27,7 @@ import com.zzz.androidvocab.core.model.SourceInfo
 import com.zzz.androidvocab.core.model.WordDetail
 import com.zzz.androidvocab.core.model.WordEntry
 import com.zzz.androidvocab.core.model.WordStatusFilter
+import com.zzz.androidvocab.core.model.toBookCodeOrNull
 import com.zzz.androidvocab.core.scheduler.ReviewScheduler
 import dagger.Binds
 import dagger.Module
@@ -155,79 +156,8 @@ class AssetVocabularyRepository
                             generatedAt = manifest.generatedAt,
                         )
                     } else {
-                        val sourcesText = readAsset("vocab/sources.json")
-                        val sourcesHash = validateSourcesHash(manifest, sourcesText)
-                        val sourceManifest = json.decodeFromString<AssetSourceManifest>(sourcesText)
-                        val bookHashes = mutableMapOf<BookCode, String>()
-                        val rows =
-                            BookCode.entries.associateWith { book ->
-                                val bookManifest =
-                                    manifest.books[book.name]
-                                        ?: throw AppException(
-                                            AppError.VocabularyImportFailed("Missing manifest entry: ${book.name}"),
-                                        )
-                                val entriesText = readAsset("vocab/${bookManifest.file}")
-                                val entries = json.decodeFromString<List<AssetWordEntry>>(entriesText)
-                                val bookHash = sha256Hex(entriesText)
-                                validateBook(book, bookManifest, entries, bookHash)
-                                bookHashes[book] = bookHash
-                                entries
-                            }
-                        validateAssetFingerprint(manifest, bookHashes, sourcesHash)
-                        database.withTransaction {
-                            wordDao.deleteAliases()
-                            wordDao.deleteMemberships()
-                            wordDao.deleteWords()
-                            val words = mutableMapOf<String, WordEntryEntity>()
-                            val memberships = mutableListOf<WordBookMembershipEntity>()
-                            val aliases = mutableListOf<WordAliasEntity>()
-                            rows.forEach { (book, entries) ->
-                                entries.forEachIndexed { index, entry ->
-                                    val normalized = entry.word.trim().lowercase()
-                                    val id = wordId(normalized)
-                                    words.putIfAbsent(id, entry.toWordEntity(id, normalized, now))
-                                    memberships += entry.toMembershipEntity(id, book, index)
-                                    aliases += entry.searchAliasValues().map { WordAliasEntity(id, it) }
-                                }
-                            }
-                            wordDao.upsertWords(words.values.toList())
-                            wordDao.upsertMemberships(memberships)
-                            wordDao.upsertAliases(aliases.distinct())
-                            wordDao.upsertSourceManifest(
-                                SourceManifestEntity(
-                                    generatedAt = sourceManifest.generatedAt,
-                                    json = sourcesText,
-                                    importedAt = now,
-                                ),
-                            )
-                            val bookCounts =
-                                BookCode.entries.associateWith {
-                                    wordDao.membershipCount(it.name)
-                                }
-                            validateImportedCounts(bookCounts)
-                            reviewDao.deleteCardsWithoutMembership()
-                            wordDao.insertImportRun(
-                                VocabularyImportRunEntity(
-                                    id = stableId("import", now.toString()),
-                                    buildTarget = manifest.buildTarget,
-                                    generatedAt = manifest.generatedAt,
-                                    bookCountsJson =
-                                        json.encodeToString(
-                                            bookCounts.mapKeys { it.key.name },
-                                        ),
-                                    assetFingerprint = manifest.assetFingerprint,
-                                    importedWords = wordDao.wordCount(),
-                                    memberships = bookCounts.values.sum(),
-                                    importedAt = now,
-                                ),
-                            )
-                            ImportResult(
-                                importedWords = wordDao.wordCount(),
-                                memberships = bookCounts.values.sum(),
-                                bookCounts = bookCounts,
-                                generatedAt = manifest.generatedAt,
-                            )
-                        }
+                        val validated = validateAndLoadAssets(manifest)
+                        rebuildDatabase(now, manifest, validated)
                     }
                 }.getOrElse { error ->
                     if (error is CancellationException) throw error
@@ -237,6 +167,89 @@ class AssetVocabularyRepository
                         error,
                     )
                 }
+            }
+
+        private fun validateAndLoadAssets(manifest: VocabManifest): ValidatedAssets {
+            val sourcesText = readAsset("vocab/sources.json")
+            val sourcesHash = validateSourcesHash(manifest, sourcesText)
+            val sourceManifest = json.decodeFromString<AssetSourceManifest>(sourcesText)
+            val bookHashes = mutableMapOf<BookCode, String>()
+            val rows =
+                BookCode.entries.associateWith { book ->
+                    val bookManifest =
+                        manifest.books[book.name]
+                            ?: throw AppException(
+                                AppError.VocabularyImportFailed("Missing manifest entry: ${book.name}"),
+                            )
+                    val entriesText = readAsset("vocab/${bookManifest.file}")
+                    val entries = json.decodeFromString<List<AssetWordEntry>>(entriesText)
+                    val bookHash = sha256Hex(entriesText)
+                    validateBook(book, bookManifest, entries, bookHash)
+                    bookHashes[book] = bookHash
+                    entries
+                }
+            validateAssetFingerprint(manifest, bookHashes, sourcesHash)
+            return ValidatedAssets(rows, sourceManifest, sourcesText)
+        }
+
+        private suspend fun rebuildDatabase(
+            now: java.time.Instant,
+            manifest: VocabManifest,
+            validated: ValidatedAssets,
+        ): ImportResult =
+            database.withTransaction {
+                wordDao.deleteAliases()
+                wordDao.deleteMemberships()
+                wordDao.deleteWords()
+                val words = mutableMapOf<String, WordEntryEntity>()
+                val memberships = mutableListOf<WordBookMembershipEntity>()
+                val aliases = mutableListOf<WordAliasEntity>()
+                validated.rows.forEach { (book, entries) ->
+                    entries.forEachIndexed { index, entry ->
+                        val normalized = entry.word.trim().lowercase()
+                        val id = wordId(normalized)
+                        words.putIfAbsent(id, entry.toWordEntity(id, normalized, now))
+                        memberships += entry.toMembershipEntity(id, book, index)
+                        aliases += entry.searchAliasValues().map { WordAliasEntity(id, it) }
+                    }
+                }
+                wordDao.upsertWords(words.values.toList())
+                wordDao.upsertMemberships(memberships)
+                wordDao.upsertAliases(aliases.distinct())
+                wordDao.upsertSourceManifest(
+                    SourceManifestEntity(
+                        generatedAt = validated.sourceManifest.generatedAt,
+                        json = validated.sourcesText,
+                        importedAt = now,
+                    ),
+                )
+                val bookCounts =
+                    BookCode.entries.associateWith {
+                        wordDao.membershipCount(it.name)
+                    }
+                validateImportedCounts(bookCounts)
+                reviewDao.deleteCardsWithoutMembership()
+                wordDao.insertImportRun(
+                    VocabularyImportRunEntity(
+                        id = stableId("import", now.toString()),
+                        buildTarget = manifest.buildTarget,
+                        generatedAt = manifest.generatedAt,
+                        bookCountsJson =
+                            json.encodeToString(
+                                bookCounts.mapKeys { it.key.name },
+                            ),
+                        assetFingerprint = manifest.assetFingerprint,
+                        importedWords = wordDao.wordCount(),
+                        memberships = bookCounts.values.sum(),
+                        importedAt = now,
+                    ),
+                )
+                ImportResult(
+                    importedWords = wordDao.wordCount(),
+                    memberships = bookCounts.values.sum(),
+                    bookCounts = bookCounts,
+                    generatedAt = manifest.generatedAt,
+                )
             }
 
         private fun readAsset(path: String): String =
@@ -371,7 +384,11 @@ internal fun isCurrentPublishSafeImport(
     }
 }
 
-private fun String.toBookCodeOrNull(): BookCode? = BookCode.entries.firstOrNull { it.name == this }
+private data class ValidatedAssets(
+    val rows: Map<BookCode, List<AssetWordEntry>>,
+    val sourceManifest: AssetSourceManifest,
+    val sourcesText: String,
+)
 
 private const val UTF8_BOM = "\uFEFF"
 private const val MAX_ALIAS_LENGTH = 80

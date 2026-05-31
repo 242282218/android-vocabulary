@@ -1,33 +1,23 @@
 package com.zzz.androidvocab.core.database
 
-import androidx.room.Room
-import androidx.test.core.app.ApplicationProvider
-import com.zzz.androidvocab.core.common.AppError
-import com.zzz.androidvocab.core.common.AppException
-import com.zzz.androidvocab.core.common.ClockProvider
 import com.zzz.androidvocab.core.common.cardId
+import com.zzz.androidvocab.core.common.logId
 import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.ReviewRating
 import com.zzz.androidvocab.core.model.ReviewState
-import com.zzz.androidvocab.core.model.SubmitFeedbackCommand
-import com.zzz.androidvocab.core.scheduler.ReviewLogPatch
-import com.zzz.androidvocab.core.scheduler.ReviewScheduler
-import com.zzz.androidvocab.core.scheduler.ScheduleInput
-import com.zzz.androidvocab.core.scheduler.ScheduleResult
-import com.zzz.androidvocab.core.scheduler.SchedulerAlgorithm
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotNull
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.time.Instant
-import java.time.ZoneId
 
 @RunWith(RobolectricTestRunner::class)
+@Suppress("LargeClass")
 class OfflineReviewRepositoryTest {
     private lateinit var database: VocabDatabase
     private lateinit var repository: OfflineReviewRepository
@@ -36,21 +26,8 @@ class OfflineReviewRepositoryTest {
 
     @Before
     fun setUp() {
-        database =
-            Room
-                .inMemoryDatabaseBuilder(
-                    ApplicationProvider.getApplicationContext(),
-                    VocabDatabase::class.java,
-                ).allowMainThreadQueries()
-                .build()
-        repository =
-            OfflineReviewRepository(
-                database = database,
-                reviewDao = database.reviewDao(),
-                statsDao = database.statsDao(),
-                scheduler = scheduler,
-                clockProvider = clock,
-            )
+        database = newOfflineReviewDatabase()
+        repository = newOfflineReviewRepository(database, scheduler, clock)
     }
 
     @After
@@ -61,7 +38,7 @@ class OfflineReviewRepositoryTest {
     @Test
     fun replayLogsRebuildsCurrentCardFromReviewLogs() =
         runTest {
-            seedWord()
+            seedWord(database, clock)
             val id = cardId(WORD_ID, BookCode.CET4.name)
             val firstReviewAt = Instant.parse("2026-05-16T08:00:00Z")
             val secondReviewAt = Instant.parse("2026-05-16T09:00:00Z")
@@ -81,7 +58,7 @@ class OfflineReviewRepositoryTest {
     @Test
     fun replayLogsRebuildsCardWhenReviewCardCacheIsMissing() =
         runTest {
-            seedWord()
+            seedWord(database, clock)
             val id = cardId(WORD_ID, BookCode.CET4.name)
             val firstReviewAt = Instant.parse("2026-05-16T08:00:00Z")
             val secondReviewAt = Instant.parse("2026-05-16T09:00:00Z")
@@ -92,10 +69,8 @@ class OfflineReviewRepositoryTest {
 
             database.reviewDao().deleteCard(id)
             val snapshotRepository =
-                OfflineReviewRepository(
+                newOfflineReviewRepository(
                     database = database,
-                    reviewDao = database.reviewDao(),
-                    statsDao = database.statsDao(),
                     scheduler = FailingScheduler(),
                     clockProvider = clock,
                 )
@@ -114,7 +89,7 @@ class OfflineReviewRepositoryTest {
     @Test
     fun getQueueItemRepairsMissingReviewCardCacheFromReviewLogs() =
         runTest {
-            seedWord()
+            seedWord(database, clock)
             val id = cardId(WORD_ID, BookCode.CET4.name)
             val firstReviewAt = Instant.parse("2026-05-16T08:00:00Z")
             val secondReviewAt = Instant.parse("2026-05-16T09:00:00Z")
@@ -125,10 +100,8 @@ class OfflineReviewRepositoryTest {
 
             database.reviewDao().deleteCard(id)
             val snapshotRepository =
-                OfflineReviewRepository(
+                newOfflineReviewRepository(
                     database = database,
-                    reviewDao = database.reviewDao(),
-                    statsDao = database.statsDao(),
                     scheduler = FailingScheduler(),
                     clockProvider = clock,
                 )
@@ -147,7 +120,7 @@ class OfflineReviewRepositoryTest {
     @Test
     fun submitFeedbackRepairsMissingReviewCardCacheBeforeScheduling() =
         runTest {
-            seedWord()
+            seedWord(database, clock)
             val id = cardId(WORD_ID, BookCode.CET4.name)
             val firstReviewAt = Instant.parse("2026-05-16T08:00:00Z")
             val secondReviewAt = Instant.parse("2026-05-16T09:00:00Z")
@@ -170,9 +143,132 @@ class OfflineReviewRepositoryTest {
         }
 
     @Test
+    fun submitFeedbackCanonicalizesNewLogWhenRequestUsesMalformedCachedCardId() =
+        runTest {
+            val malformedCardId = "broken-card-id"
+            val canonicalCardId = cardId("broken-card-word", BookCode.CET4.name)
+            val reviewedAt = Instant.parse("2026-05-16T08:00:00Z")
+            seedWord(database, clock, wordId = "broken-card-word", value = "broken", orderIndex = 0)
+            database.reviewDao().upsertCard(
+                ReviewCardEntity(
+                    id = malformedCardId,
+                    wordId = "broken-card-word",
+                    bookCode = BookCode.CET4.name,
+                    state = ReviewState.Review.name,
+                    difficulty = 0.7,
+                    stability = 2.0,
+                    retrievability = 0.7,
+                    scheduledDays = 2,
+                    dueAt = reviewedAt.minusSeconds(60),
+                    lastReviewAt = reviewedAt.minusSeconds(SECONDS_PER_DAY),
+                    reviewCount = 1,
+                    lapseCount = 0,
+                    firstReviewedAt = reviewedAt.minusSeconds(SECONDS_PER_DAY),
+                    createdAt = reviewedAt.minusSeconds(SECONDS_PER_DAY),
+                    updatedAt = reviewedAt.minusSeconds(SECONDS_PER_DAY),
+                ),
+            )
+
+            val result = repository.submitFeedback(command(malformedCardId, reviewedAt, ReviewRating.Good, 0.9))
+            val storedLogs = database.reviewDao().getLogs(canonicalCardId).map { it.toModel() }
+
+            assertEquals(canonicalCardId, result.log.cardId)
+            assertEquals(logId(canonicalCardId, reviewedAt.toString()), result.log.id)
+            assertEquals(listOf(canonicalCardId), storedLogs.map { it.cardId })
+            assertEquals(listOf(logId(canonicalCardId, reviewedAt.toString())), storedLogs.map { it.id })
+            assertEquals(emptyList<String>(), database.reviewDao().getLogs(malformedCardId).map { it.cardId })
+            assertEquals(null, database.reviewDao().getCard(malformedCardId))
+            assertEquals(
+                canonicalCardId,
+                database
+                    .reviewDao()
+                    .getCard(canonicalCardId)
+                    ?.toModel()
+                    ?.id,
+            )
+        }
+
+    @Test
+    fun inspectAndRepairTreatMalformedCurrentCardIdAsRepairableCacheIssue() =
+        runTest {
+            val malformedCardId = "broken-card-id"
+            val canonicalCardId = cardId("broken-card-word", BookCode.CET4.name)
+            val reviewedAt = Instant.parse("2026-05-10T08:00:00Z")
+            seedWord(database, clock, wordId = "broken-card-word", value = "broken", orderIndex = 0)
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "broken-log",
+                    cardId = canonicalCardId,
+                    wordId = "broken-card-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Good.wireName,
+                    reviewedAt = reviewedAt,
+                    localDay = "2026-05-10",
+                    elapsedDays = null,
+                    scheduledDaysBefore = 0,
+                    scheduledDaysAfter = 3,
+                    difficultyBefore = null,
+                    difficultyAfter = 0.82,
+                    stabilityBefore = null,
+                    stabilityAfter = 3.0,
+                    retrievabilityBefore = null,
+                    retrievabilityAfter = 0.82,
+                    durationMs = 500,
+                    targetRetention = 0.82,
+                    algorithm = "fsrs",
+                    algorithmVersion = "test",
+                    stateAfter = ReviewState.Review.name,
+                    dueAtAfter = reviewedAt.plusSeconds(3 * SECONDS_PER_DAY),
+                ),
+            )
+            database.reviewDao().upsertCard(
+                ReviewCardEntity(
+                    id = malformedCardId,
+                    wordId = "broken-card-word",
+                    bookCode = BookCode.CET4.name,
+                    state = ReviewState.Review.name,
+                    difficulty = 0.82,
+                    stability = 3.0,
+                    retrievability = 0.82,
+                    scheduledDays = 3,
+                    dueAt = reviewedAt.plusSeconds(3 * SECONDS_PER_DAY),
+                    lastReviewAt = reviewedAt,
+                    reviewCount = 1,
+                    lapseCount = 0,
+                    firstReviewedAt = reviewedAt,
+                    createdAt = reviewedAt,
+                    updatedAt = reviewedAt,
+                ),
+            )
+            val derivedStats = database.statsDao().dailyStatsFromLogs("2026-05-10", reviewedAt)
+            database.statsDao().upsertDailyStats(checkNotNull(derivedStats))
+
+            val reportBefore = repository.inspectReviewDataIntegrity()
+            val repairResult = repository.repairReviewDataCache()
+            val reportAfter = repairResult.after
+            val canonicalCard = database.reviewDao().getCard(canonicalCardId)?.toModel()
+            val malformedCard = database.reviewDao().getCard(malformedCardId)
+
+            assertEquals(1, reportBefore.cardsWithLogs)
+            assertEquals(0, reportBefore.missingCacheCount)
+            assertEquals(1, reportBefore.inconsistentCacheCount)
+            assertEquals(0, reportBefore.malformedLogCardCount)
+            assertEquals(1, reportBefore.repairableIssueCount)
+            assertEquals(0, reportBefore.manualReviewIssueCount)
+            assertEquals(1, repairResult.repairedCount)
+            assertEquals(0, reportAfter.inconsistentCacheCount)
+            assertEquals(0, reportAfter.repairableIssueCount)
+            assertNotNull(canonicalCard)
+            assertEquals(null, malformedCard)
+            assertEquals(canonicalCardId, canonicalCard?.id)
+            assertEquals(reviewedAt.plusSeconds(3 * SECONDS_PER_DAY), canonicalCard?.dueAt)
+            assertEquals(1, canonicalCard?.reviewCount)
+        }
+
+    @Test
     fun todayQueueRepairsMissingReviewCardCacheBeforeLoading() =
         runTest {
-            seedWord()
+            seedWord(database, clock)
             val id = cardId(WORD_ID, BookCode.CET4.name)
             val reviewedAt = Instant.parse("2026-05-10T08:00:00Z")
 
@@ -193,575 +289,642 @@ class OfflineReviewRepositoryTest {
         }
 
     @Test
-    fun inspectReviewDataIntegrityReportsMissingInconsistentAndLegacyCards() =
+    fun todayQueueRepairsMissingReviewCardCacheAgainAfterEarlierHealthyLoad() =
         runTest {
-            val firstReviewAt = Instant.parse("2026-05-16T08:00:00Z")
-            seedWord(wordId = "missing-word", value = "missing", orderIndex = 0)
-            seedWord(wordId = "stale-word", value = "stale", orderIndex = 1)
-            seedWord(wordId = "legacy-word", value = "legacy", orderIndex = 2)
-            val missingId = cardId("missing-word", BookCode.CET4.name)
-            val staleId = cardId("stale-word", BookCode.CET4.name)
-            val legacyId = cardId("legacy-word", BookCode.CET4.name)
-
-            repository.submitFeedback(command(missingId, firstReviewAt, ReviewRating.Good, 0.82))
-            repository.submitFeedback(command(staleId, firstReviewAt, ReviewRating.Good, 0.82))
-            database.reviewDao().deleteCard(missingId)
-            val staleCard = database.reviewDao().getCard(staleId)!!.toModel()
-            database.reviewDao().upsertCard(staleCard.copy(scheduledDays = staleCard.scheduledDays + 1).toEntity())
-            insertLegacyLog(legacyId, "legacy-word", firstReviewAt)
-            database.reviewDao().upsertCard(reviewCard("legacy-word", clock.now(), ReviewState.Review, 7, due = true))
-
-            val report = repository.inspectReviewDataIntegrity()
-
-            assertEquals(3, report.cardsWithLogs)
-            assertEquals(1, report.missingCacheCount)
-            assertEquals(1, report.inconsistentCacheCount)
-            assertEquals(1, report.legacyLogCardCount)
-            assertEquals(3, report.issueCount)
-            assertEquals(2, report.repairableIssueCount)
-        }
-
-    @Test
-    fun repairReviewDataCacheFixesSnapshotBackedMissingAndInconsistentCards() =
-        runTest {
-            val firstReviewAt = Instant.parse("2026-05-16T08:00:00Z")
-            seedWord(wordId = "missing-word", value = "missing", orderIndex = 0)
-            seedWord(wordId = "stale-word", value = "stale", orderIndex = 1)
-            val missingId = cardId("missing-word", BookCode.CET4.name)
-            val staleId = cardId("stale-word", BookCode.CET4.name)
-
-            repository.submitFeedback(command(missingId, firstReviewAt, ReviewRating.Good, 0.82))
-            repository.submitFeedback(command(staleId, firstReviewAt, ReviewRating.Easy, 0.91))
-            val expectedMissing = database.reviewDao().getCard(missingId)!!.toModel()
-            val expectedStale = database.reviewDao().getCard(staleId)!!.toModel()
-            database.reviewDao().deleteCard(missingId)
-            database.reviewDao().upsertCard(expectedStale.copy(lapseCount = 9).toEntity())
-
-            val result = repository.repairReviewDataCache()
-            val repairedMissing = database.reviewDao().getCard(missingId)!!.toModel()
-            val repairedStale = database.reviewDao().getCard(staleId)!!.toModel()
-
-            assertEquals(1, result.before.missingCacheCount)
-            assertEquals(1, result.before.inconsistentCacheCount)
-            assertEquals(2, result.before.repairableIssueCount)
-            assertEquals(2, result.repairedCount)
-            assertEquals(0, result.after.issueCount)
-            assertEquals(0, result.after.repairableIssueCount)
-            assertEquals(expectedMissing.scheduledDays, repairedMissing.scheduledDays)
-            assertEquals(expectedMissing.dueAt, repairedMissing.dueAt)
-            assertEquals(expectedStale.lapseCount, repairedStale.lapseCount)
-            assertEquals(expectedStale.scheduledDays, repairedStale.scheduledDays)
-        }
-
-    @Test
-    fun repairReviewDataCacheDoesNotRewriteLegacyLogsWithoutSnapshots() =
-        runTest {
-            val reviewedAt = Instant.parse("2026-05-16T08:00:00Z")
-            seedWord(wordId = "legacy-word", value = "legacy", orderIndex = 0)
-            val legacyId = cardId("legacy-word", BookCode.CET4.name)
-            insertLegacyLog(legacyId, "legacy-word", reviewedAt)
-
-            val result = repository.repairReviewDataCache()
-
-            assertEquals(1, result.before.cardsWithLogs)
-            assertEquals(1, result.before.missingCacheCount)
-            assertEquals(1, result.before.legacyLogCardCount)
-            assertEquals(2, result.before.issueCount)
-            assertEquals(0, result.before.repairableIssueCount)
-            assertEquals(0, result.repairedCount)
-            assertEquals(1, result.after.missingCacheCount)
-            assertEquals(null, database.reviewDao().getCard(legacyId))
-        }
-
-    @Test
-    fun inspectReviewDataIntegrityReportsOrphanLogs() =
-        runTest {
-            database.reviewDao().insertLog(
-                ReviewLogEntity(
-                    id = "orphan-log",
-                    cardId = cardId("orphan-word", BookCode.CET4.name),
-                    wordId = "orphan-word",
-                    bookCode = BookCode.CET4.name,
-                    rating = ReviewRating.Good.wireName,
-                    reviewedAt = Instant.parse("2026-05-16T08:00:00Z"),
-                    localDay = "2026-05-16",
-                    elapsedDays = null,
-                    scheduledDaysBefore = 0,
-                    scheduledDaysAfter = 1,
-                    difficultyBefore = null,
-                    difficultyAfter = 5.0,
-                    stabilityBefore = null,
-                    stabilityAfter = 1.0,
-                    retrievabilityBefore = null,
-                    retrievabilityAfter = 0.9,
-                    durationMs = 500,
-                    targetRetention = 0.9,
-                    algorithm = "fsrs",
-                    algorithmVersion = "test",
-                ),
-            )
-
-            val report = repository.inspectReviewDataIntegrity()
-
-            assertEquals(0, report.cardsWithLogs)
-            assertEquals(1, report.orphanLogCount)
-            assertEquals(1, report.issueCount)
-            assertEquals(0, report.repairableIssueCount)
-        }
-
-    @Test
-    fun replayLogsFallsBackToSchedulerWhenLogSnapshotsAreMissing() =
-        runTest {
-            seedWord()
+            seedWord(database, clock)
             val id = cardId(WORD_ID, BookCode.CET4.name)
-            val reviewedAt = Instant.parse("2026-05-16T08:00:00Z")
-            database.reviewDao().insertLog(
-                ReviewLogEntity(
-                    id = "legacy-log",
-                    cardId = id,
-                    wordId = WORD_ID,
-                    bookCode = BookCode.CET4.name,
-                    rating = ReviewRating.Good.wireName,
-                    reviewedAt = reviewedAt,
-                    localDay = "2026-05-16",
-                    elapsedDays = null,
-                    scheduledDaysBefore = 0,
-                    scheduledDaysAfter = 10,
-                    difficultyBefore = null,
-                    difficultyAfter = 4.0,
-                    stabilityBefore = null,
-                    stabilityAfter = 10.0,
-                    retrievabilityBefore = null,
-                    retrievabilityAfter = 0.8,
-                    durationMs = 500,
-                    targetRetention = 0.83,
-                    algorithm = "fsrs",
-                    algorithmVersion = "legacy",
-                ),
-            )
+            val reviewedAt = Instant.parse("2026-05-10T08:00:00Z")
 
-            val replayed = repository.replayLogs(id)
+            repository
+                .observeTodayQueue(clock.now(), selectedBooks = setOf(BookCode.CET4), dailyNewLimit = 10)
+                .first()
+            repository.submitFeedback(command(id, reviewedAt, ReviewRating.Good, 0.01))
+            val current = database.reviewDao().getCard(id)!!.toModel()
+            database.reviewDao().deleteCard(id)
 
-            assertEquals(1, replayed.reviewCount)
-            assertEquals(0, replayed.lapseCount)
-            assertEquals(0.83, replayed.difficulty)
-            assertEquals(reviewedAt, replayed.lastReviewAt)
-        }
-
-    @Test
-    fun replayLogsDisablesFuzzingForLegacyLogs() =
-        runTest {
-            RecordingScheduler.enableFuzzingValues.clear()
-            seedWord()
-            val id = cardId(WORD_ID, BookCode.CET4.name)
-            val reviewedAt = Instant.parse("2026-05-16T08:00:00Z")
-            database.reviewDao().insertLog(
-                ReviewLogEntity(
-                    id = "legacy-log-no-fuzz",
-                    cardId = id,
-                    wordId = WORD_ID,
-                    bookCode = BookCode.CET4.name,
-                    rating = ReviewRating.Good.wireName,
-                    reviewedAt = reviewedAt,
-                    localDay = "2026-05-16",
-                    elapsedDays = null,
-                    scheduledDaysBefore = 0,
-                    scheduledDaysAfter = 10,
-                    difficultyBefore = null,
-                    difficultyAfter = 4.0,
-                    stabilityBefore = null,
-                    stabilityAfter = 10.0,
-                    retrievabilityBefore = null,
-                    retrievabilityAfter = 0.8,
-                    durationMs = 500,
-                    targetRetention = 0.83,
-                    algorithm = "fsrs",
-                    algorithmVersion = "legacy",
-                ),
-            )
-            val recordingRepository =
-                OfflineReviewRepository(
-                    database = database,
-                    reviewDao = database.reviewDao(),
-                    statsDao = database.statsDao(),
-                    scheduler = RecordingScheduler(),
-                    clockProvider = clock,
-                )
-
-            recordingRepository.replayLogs(id)
-
-            assertEquals(listOf(false), RecordingScheduler.enableFuzzingValues)
-        }
-
-    @Test
-    fun todayCompletedCountUsesEveryReviewLog() =
-        runTest {
-            seedWord()
-            val id = cardId(WORD_ID, BookCode.CET4.name)
-            val firstReviewAt = Instant.parse("2026-05-16T08:00:00Z")
-            val secondReviewAt = Instant.parse("2026-05-16T09:00:00Z")
-
-            repository.submitFeedback(command(id, firstReviewAt, ReviewRating.Good, 0.9))
-            repository.submitFeedback(command(id, secondReviewAt, ReviewRating.Again, 0.9))
-
-            assertEquals(2, database.statsDao().observeDailyCompleted("2026-05-16").first())
-            assertEquals(
-                2,
-                database
-                    .statsDao()
-                    .observeDailyActivityRows("2026-05-16", "2026-05-16")
+            val queue =
+                repository
+                    .observeTodayQueue(clock.now(), selectedBooks = setOf(BookCode.CET4), dailyNewLimit = 10)
                     .first()
-                    .single()
-                    .reviewCount,
-            )
-            assertEquals(1, database.statsDao().observeDailyNewCount("2026-05-16").first())
-            val cachedStats = database.exportDao().dailyStats().single()
-            assertEquals("2026-05-16", cachedStats.localDay)
-            assertEquals(1, cachedStats.newCount)
-            assertEquals(1, cachedStats.reviewCount)
-            assertEquals(2, cachedStats.completedCount)
-            assertEquals(1, cachedStats.againCount)
-            assertEquals(1, cachedStats.goodCount)
+            val restored = database.reviewDao().getCard(id)!!.toModel()
+
+            assertEquals(emptyList<String>(), queue.newItems.map { it.word.word })
+            assertEquals(listOf("abandon"), queue.dueItems.map { it.word.word })
+            assertEquals(current.scheduledDays, restored.scheduledDays)
+            assertEquals(current.dueAt, restored.dueAt)
         }
 
     @Test
-    fun laterDayReviewDoesNotCountAsNewAgain() =
+    fun todayQueueCanonicalizesMalformedCachedCardIdBeforeExpose() =
         runTest {
-            seedWord()
-            val id = cardId(WORD_ID, BookCode.CET4.name)
-            val firstReviewAt = Instant.parse("2026-05-16T08:00:00Z")
-            val secondReviewAt = Instant.parse("2026-05-17T08:00:00Z")
-
-            repository.submitFeedback(command(id, firstReviewAt, ReviewRating.Good, 0.9))
-            repository.submitFeedback(command(id, secondReviewAt, ReviewRating.Hard, 0.9))
-
-            assertEquals(1, database.statsDao().dailyNewCount("2026-05-16"))
-            assertEquals(0, database.statsDao().dailyNewCount("2026-05-17"))
-
-            val cachedStats = database.exportDao().dailyStats().associateBy { it.localDay }
-            val firstDay = cachedStats.getValue("2026-05-16")
-            val secondDay = cachedStats.getValue("2026-05-17")
-
-            assertEquals(1, firstDay.newCount)
-            assertEquals(0, firstDay.reviewCount)
-            assertEquals(1, firstDay.completedCount)
-            assertEquals(0, secondDay.newCount)
-            assertEquals(1, secondDay.reviewCount)
-            assertEquals(1, secondDay.completedCount)
-            assertEquals(1, secondDay.hardCount)
-        }
-
-    @Test
-    fun duplicateReviewLogRollsBackCardAndStatsUpdates() =
-        runTest {
-            seedWord()
-            val id = cardId(WORD_ID, BookCode.CET4.name)
-            val reviewedAt = Instant.parse("2026-05-16T08:00:00Z")
-
-            repository.submitFeedback(command(id, reviewedAt, ReviewRating.Good, 0.9))
-            val cardAfterFirstSubmit = database.reviewDao().getCard(id)!!.toModel()
-
-            val error =
-                runCatching {
-                    repository.submitFeedback(command(id, reviewedAt, ReviewRating.Hard, 0.7))
-                }.exceptionOrNull()
-
-            assertTrue((error as AppException).error is AppError.DatabaseWriteFailed)
-            assertEquals(listOf(ReviewRating.Good), database.reviewDao().getLogs(id).map { it.toModel().rating })
-
-            val cardAfterDuplicateSubmit = database.reviewDao().getCard(id)!!.toModel()
-            assertEquals(cardAfterFirstSubmit.reviewCount, cardAfterDuplicateSubmit.reviewCount)
-            assertEquals(cardAfterFirstSubmit.scheduledDays, cardAfterDuplicateSubmit.scheduledDays)
-            assertEquals(cardAfterFirstSubmit.difficulty, cardAfterDuplicateSubmit.difficulty)
-            assertEquals(cardAfterFirstSubmit.updatedAt, cardAfterDuplicateSubmit.updatedAt)
-
-            val cachedStats = database.exportDao().dailyStats().single()
-            assertEquals(1, cachedStats.completedCount)
-            assertEquals(1, cachedStats.newCount)
-            assertEquals(0, cachedStats.reviewCount)
-            assertEquals(1, cachedStats.goodCount)
-            assertEquals(0, cachedStats.hardCount)
-        }
-
-    @Test
-    fun schedulerFailureDoesNotWriteLearningData() =
-        runTest {
-            seedWord()
-            val id = cardId(WORD_ID, BookCode.CET4.name)
-            val failingRepository =
-                OfflineReviewRepository(
-                    database = database,
-                    reviewDao = database.reviewDao(),
-                    statsDao = database.statsDao(),
-                    scheduler = FailingScheduler(),
-                    clockProvider = clock,
-                )
-
-            val error =
-                runCatching {
-                    failingRepository.submitFeedback(
-                        command(
-                            cardId = id,
-                            reviewedAt = Instant.parse("2026-05-16T08:00:00Z"),
-                            rating = ReviewRating.Good,
-                            targetRetention = 0.9,
-                        ),
-                    )
-                }.exceptionOrNull()
-
-            assertTrue((error as AppException).error is AppError.SchedulerFailed)
-            assertEquals(null, database.reviewDao().getCard(id))
-            assertEquals(0, database.statsDao().dailyCompleted("2026-05-16"))
-        }
-
-    @Test
-    fun todayQueuePrioritizesRecentlyDifficultDueCardsWhenDueAtTies() =
-        runTest {
-            val now = clock.now()
-            seedWord(wordId = "easy-word", value = "easy", orderIndex = 0)
-            seedWord(wordId = "hard-word", value = "hard", orderIndex = 1)
+            val reviewedAt = Instant.parse("2026-05-10T08:00:00Z")
+            val malformedCardId = "broken-card-id"
+            val canonicalCardId = cardId("broken-card-word", BookCode.CET4.name)
+            seedWord(database, clock, wordId = "broken-card-word", value = "broken", orderIndex = 0)
             database.reviewDao().upsertCard(
-                reviewCard("easy-word", now, ReviewState.Review, scheduledDays = 3, due = true),
-            )
-            database.reviewDao().upsertCard(
-                reviewCard("hard-word", now, ReviewState.Review, scheduledDays = 3, due = true),
-            )
-            database.reviewDao().insertLog(
-                ReviewLogEntity(
-                    id = "log-hard",
-                    cardId = cardId("hard-word", BookCode.CET4.name),
-                    wordId = "hard-word",
+                ReviewCardEntity(
+                    id = malformedCardId,
+                    wordId = "broken-card-word",
                     bookCode = BookCode.CET4.name,
-                    rating = ReviewRating.Again.wireName,
-                    reviewedAt = now.minusSeconds(3_600),
-                    localDay = "2026-05-16",
-                    elapsedDays = 0,
-                    scheduledDaysBefore = 3,
-                    scheduledDaysAfter = 1,
-                    difficultyBefore = 5.0,
-                    difficultyAfter = 6.0,
-                    stabilityBefore = 2.0,
-                    stabilityAfter = 1.0,
-                    retrievabilityBefore = 0.7,
-                    retrievabilityAfter = 0.9,
-                    durationMs = 800,
-                    targetRetention = 0.9,
-                    algorithm = "fsrs",
-                    algorithmVersion = "test",
+                    state = ReviewState.Review.name,
+                    difficulty = 0.82,
+                    stability = 3.0,
+                    retrievability = 0.82,
+                    scheduledDays = 3,
+                    dueAt = reviewedAt.plusSeconds(SECONDS_PER_DAY),
+                    lastReviewAt = reviewedAt,
+                    reviewCount = 1,
+                    lapseCount = 0,
+                    firstReviewedAt = reviewedAt,
+                    createdAt = reviewedAt,
+                    updatedAt = reviewedAt,
                 ),
             )
 
             val queue =
                 repository
-                    .observeTodayQueue(now, selectedBooks = setOf(BookCode.CET4), dailyNewLimit = 0)
+                    .observeTodayQueue(clock.now(), selectedBooks = setOf(BookCode.CET4), dailyNewLimit = 10)
+                    .first()
+            val canonicalCard = database.reviewDao().getCard(canonicalCardId)?.toModel()
+            val malformedCard = database.reviewDao().getCard(malformedCardId)
+
+            assertEquals(listOf(canonicalCardId), queue.dueItems.map { it.card.id })
+            assertEquals(listOf("broken"), queue.dueItems.map { it.word.word })
+            assertEquals(emptyList<String>(), queue.newItems.map { it.word.word })
+            assertNotNull(canonicalCard)
+            assertEquals(null, malformedCard)
+            assertEquals(canonicalCardId, canonicalCard?.id)
+            assertEquals(reviewedAt.plusSeconds(SECONDS_PER_DAY), canonicalCard?.dueAt)
+            assertEquals(1, canonicalCard?.reviewCount)
+        }
+
+    @Test
+    fun todayQueueSkipsLegacyLogRepairWhenReplayFails() =
+        runTest {
+            val reviewedAt = Instant.parse("2026-05-10T08:00:00Z")
+            seedWord(database, clock, wordId = "legacy-word", value = "legacy", orderIndex = 0)
+            val legacyId = cardId("legacy-word", BookCode.CET4.name)
+            insertLegacyLog(database, legacyId, "legacy-word", reviewedAt)
+            val failingRepository =
+                newOfflineReviewRepository(
+                    database = database,
+                    scheduler = FailingScheduler(),
+                    clockProvider = clock,
+                )
+
+            val queue =
+                failingRepository
+                    .observeTodayQueue(clock.now(), selectedBooks = setOf(BookCode.CET4), dailyNewLimit = 10)
                     .first()
 
-            assertEquals(listOf("hard", "easy"), queue.dueItems.map { it.word.word })
+            assertEquals(emptyList<String>(), queue.dueItems.map { it.word.word })
+            assertEquals(emptyList<String>(), queue.newItems.map { it.word.word })
+            assertEquals(null, database.reviewDao().getCard(legacyId))
         }
 
-    private suspend fun seedWord(
-        wordId: String = WORD_ID,
-        value: String = "abandon",
-        orderIndex: Int = 0,
-    ) {
-        database.wordDao().upsertWords(
-            listOf(
-                WordEntryEntity(
-                    id = wordId,
-                    word = value,
-                    meaning = "放弃",
-                    phonetic = null,
-                    partOfSpeech = "verb",
-                    definition = null,
-                    cefrLevel = null,
-                    cefrRank = 0.0,
-                    frequency = 1.0,
-                    sourceFlagsJson = "[]",
-                    coverageTier = null,
-                    createdAt = clock.now(),
-                    updatedAt = clock.now(),
-                ),
-            ),
-        )
-        database.wordDao().upsertMemberships(
-            listOf(
-                WordBookMembershipEntity(
-                    wordId = wordId,
+    @Test
+    fun todayQueueRepairsLegacyLogsWhenSchedulerCanReplayThem() =
+        runTest {
+            val reviewedAt = Instant.parse("2026-05-15T07:00:00Z")
+            seedWord(database, clock, wordId = "legacy-word", value = "legacy", orderIndex = 0)
+            val legacyId = cardId("legacy-word", BookCode.CET4.name)
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "legacy-log-due",
+                    cardId = legacyId,
+                    wordId = "legacy-word",
                     bookCode = BookCode.CET4.name,
-                    orderIndex = orderIndex,
-                    examFrequencyScore = 1.0,
-                    examPriorityScore = 1.0,
-                    isPhraseBacked = false,
-                    phraseCount = 0,
+                    rating = ReviewRating.Again.wireName,
+                    reviewedAt = reviewedAt,
+                    localDay = "2026-05-15",
+                    elapsedDays = null,
+                    scheduledDaysBefore = 0,
+                    scheduledDaysAfter = 1,
+                    difficultyBefore = null,
+                    difficultyAfter = 4.0,
+                    stabilityBefore = null,
+                    stabilityAfter = 1.0,
+                    retrievabilityBefore = null,
+                    retrievabilityAfter = 0.8,
+                    durationMs = 500,
+                    targetRetention = 0.01,
+                    algorithm = "fsrs",
+                    algorithmVersion = "legacy",
                 ),
-            ),
-        )
-    }
-
-    private fun command(
-        cardId: String,
-        reviewedAt: Instant,
-        rating: ReviewRating,
-        targetRetention: Double,
-    ) = SubmitFeedbackCommand(
-        cardId = cardId,
-        rating = rating,
-        reviewedAt = reviewedAt,
-        durationMs = 500,
-        targetRetention = targetRetention,
-    )
-
-    private fun reviewCard(
-        wordId: String,
-        now: Instant,
-        state: ReviewState,
-        scheduledDays: Int,
-        due: Boolean,
-    ) = ReviewCardEntity(
-        id = cardId(wordId, BookCode.CET4.name),
-        wordId = wordId,
-        bookCode = BookCode.CET4.name,
-        state = state.name,
-        difficulty = 0.5,
-        stability = scheduledDays.toDouble(),
-        retrievability = if (scheduledDays >= 21) 0.9 else 0.7,
-        scheduledDays = scheduledDays,
-        dueAt = if (due) now.minusSeconds(60) else now.plusSeconds(SECONDS_PER_DAY),
-        lastReviewAt = now.minusSeconds(SECONDS_PER_DAY),
-        reviewCount = 1,
-        lapseCount = 0,
-        firstReviewedAt = now.minusSeconds(SECONDS_PER_DAY),
-        createdAt = now.minusSeconds(SECONDS_PER_DAY),
-        updatedAt = now,
-    )
-
-    private suspend fun insertLegacyLog(
-        cardId: String,
-        wordId: String,
-        reviewedAt: Instant,
-    ) {
-        database.reviewDao().insertLog(
-            ReviewLogEntity(
-                id = "legacy-log-$wordId",
-                cardId = cardId,
-                wordId = wordId,
-                bookCode = BookCode.CET4.name,
-                rating = ReviewRating.Good.wireName,
-                reviewedAt = reviewedAt,
-                localDay = "2026-05-16",
-                elapsedDays = null,
-                scheduledDaysBefore = 0,
-                scheduledDaysAfter = 10,
-                difficultyBefore = null,
-                difficultyAfter = 4.0,
-                stabilityBefore = null,
-                stabilityAfter = 10.0,
-                retrievabilityBefore = null,
-                retrievabilityAfter = 0.8,
-                durationMs = 500,
-                targetRetention = 0.83,
-                algorithm = "fsrs",
-                algorithmVersion = "legacy",
-            ),
-        )
-    }
-
-    private class FixedClock : ClockProvider {
-        private val fixedNow = Instant.parse("2026-05-16T07:00:00Z")
-        private val fixedZone = ZoneId.of("Asia/Shanghai")
-
-        override fun now(): Instant = fixedNow
-
-        override fun zoneId(): ZoneId = fixedZone
-    }
-
-    private class DeterministicScheduler : ReviewScheduler {
-        override val algorithm: SchedulerAlgorithm = SchedulerAlgorithm.Fsrs
-
-        override fun schedule(input: ScheduleInput): ScheduleResult {
-            val scheduledDays = input.card.scheduledDays + (input.targetRetention * 100).toInt() + input.rating.ordinal
-            val nextCard =
-                input.card.copy(
-                    state = ReviewState.Review,
-                    difficulty = input.targetRetention,
-                    stability = scheduledDays.toDouble(),
-                    retrievability = input.targetRetention,
-                    scheduledDays = scheduledDays,
-                    dueAt = input.reviewedAt.plusSeconds(scheduledDays.toLong() * SECONDS_PER_DAY),
-                    lastReviewAt = input.reviewedAt,
-                    reviewCount = input.card.reviewCount + 1,
-                    lapseCount = input.card.lapseCount + if (input.rating == ReviewRating.Again) 1 else 0,
-                    firstReviewedAt = input.card.firstReviewedAt ?: input.reviewedAt,
-                    updatedAt = input.reviewedAt,
-                )
-            return ScheduleResult(
-                nextCard = nextCard,
-                logPatch =
-                    ReviewLogPatch(
-                        scheduledDaysBefore = input.card.scheduledDays,
-                        scheduledDaysAfter = scheduledDays,
-                        difficultyBefore = input.card.difficulty,
-                        difficultyAfter = nextCard.difficulty,
-                        stabilityBefore = input.card.stability,
-                        stabilityAfter = nextCard.stability,
-                        retrievabilityBefore = input.card.retrievability,
-                        retrievabilityAfter = nextCard.retrievability,
-                    ),
-                algorithmVersion = "test",
             )
+
+            val queue =
+                repository
+                    .observeTodayQueue(clock.now(), selectedBooks = setOf(BookCode.CET4), dailyNewLimit = 10)
+                    .first()
+            val restored = database.reviewDao().getCard(legacyId)!!.toModel()
+
+            assertEquals(emptyList<String>(), queue.newItems.map { it.word.word })
+            assertEquals(listOf("legacy"), queue.dueItems.map { it.word.word })
+            assertEquals(1, restored.reviewCount)
+            assertEquals(reviewedAt, restored.lastReviewAt)
+            assertEquals(reviewedAt.plusSeconds(SECONDS_PER_DAY), restored.dueAt)
         }
-    }
 
-    private class RecordingScheduler : ReviewScheduler {
-        override val algorithm: SchedulerAlgorithm = SchedulerAlgorithm.Fsrs
-
-        override fun schedule(input: ScheduleInput): ScheduleResult {
-            enableFuzzingValues += input.enableFuzzing
-            val scheduledDays = 1
-            val nextCard =
-                input.card.copy(
-                    state = ReviewState.Review,
-                    difficulty = input.targetRetention,
-                    stability = scheduledDays.toDouble(),
-                    retrievability = input.targetRetention,
-                    scheduledDays = scheduledDays,
-                    dueAt = input.reviewedAt.plusSeconds(SECONDS_PER_DAY),
-                    lastReviewAt = input.reviewedAt,
-                    reviewCount = input.card.reviewCount + 1,
-                    lapseCount = input.card.lapseCount + if (input.rating == ReviewRating.Again) 1 else 0,
-                    firstReviewedAt = input.card.firstReviewedAt ?: input.reviewedAt,
-                    updatedAt = input.reviewedAt,
-                )
-            return ScheduleResult(
-                nextCard = nextCard,
-                logPatch =
-                    ReviewLogPatch(
-                        scheduledDaysBefore = input.card.scheduledDays,
-                        scheduledDaysAfter = scheduledDays,
-                        difficultyBefore = input.card.difficulty,
-                        difficultyAfter = nextCard.difficulty,
-                        stabilityBefore = input.card.stability,
-                        stabilityAfter = nextCard.stability,
-                        retrievabilityBefore = input.card.retrievability,
-                        retrievabilityAfter = nextCard.retrievability,
-                    ),
-                algorithmVersion = "test",
+    @Test
+    fun inspectAndRepairUseLogWordIdentityWhenCardIdIsMalformed() =
+        runTest {
+            val reviewedAt = Instant.parse("2026-05-10T08:00:00Z")
+            seedWord(database, clock, wordId = "broken-card-word", value = "broken", orderIndex = 0)
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "broken-log",
+                    cardId = "broken-card-id",
+                    wordId = "broken-card-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Good.wireName,
+                    reviewedAt = reviewedAt,
+                    localDay = "2026-05-10",
+                    elapsedDays = 0,
+                    scheduledDaysBefore = 0,
+                    scheduledDaysAfter = 3,
+                    difficultyBefore = null,
+                    difficultyAfter = 0.82,
+                    stabilityBefore = null,
+                    stabilityAfter = 3.0,
+                    retrievabilityBefore = null,
+                    retrievabilityAfter = 0.82,
+                    durationMs = 500,
+                    targetRetention = 0.82,
+                    algorithm = "fsrs",
+                    algorithmVersion = "test",
+                    stateAfter = ReviewState.Review.name,
+                    dueAtAfter = reviewedAt.plusSeconds(3 * SECONDS_PER_DAY),
+                ),
             )
+
+            val reportBefore = repository.inspectReviewDataIntegrity()
+            val repairResult = repository.repairReviewDataCache()
+            val repairedCard =
+                database.reviewDao().getCard(cardId("broken-card-word", BookCode.CET4.name))?.toModel()
+
+            assertEquals(1, reportBefore.cardsWithLogs)
+            assertEquals(1, reportBefore.missingCacheCount)
+            assertEquals(1, reportBefore.missingDailyStatsCount)
+            assertEquals(1, reportBefore.malformedLogCardCount)
+            assertEquals(1, reportBefore.timelineConflictCardCount)
+            assertEquals(2, reportBefore.manualReviewIssueCount)
+            assertEquals(2, reportBefore.repairableIssueCount)
+            assertEquals(4, reportBefore.issueCount)
+            assertEquals(2, repairResult.repairedCount)
+            assertEquals(0, repairResult.after.missingCacheCount)
+            assertEquals(0, repairResult.after.missingDailyStatsCount)
+            assertEquals(1, repairResult.after.malformedLogCardCount)
+            assertEquals(1, repairResult.after.timelineConflictCardCount)
+            assertEquals(2, repairResult.after.manualReviewIssueCount)
+            assertEquals(0, repairResult.after.repairableIssueCount)
+            assertNotNull(repairedCard)
+            assertEquals(cardId("broken-card-word", BookCode.CET4.name), repairedCard?.id)
+            assertEquals("broken-card-word", repairedCard?.wordId)
+            assertEquals(BookCode.CET4, repairedCard?.bookCode)
+            assertEquals(1, repairedCard?.reviewCount)
+            assertEquals(reviewedAt, repairedCard?.lastReviewAt)
+            assertEquals(reviewedAt.plusSeconds(3 * SECONDS_PER_DAY), repairedCard?.dueAt)
         }
 
-        companion object {
-            val enableFuzzingValues = mutableListOf<Boolean>()
+    @Test
+    fun getQueueItemCanonicalizesMalformedCardIdToLogicalCard() =
+        runTest {
+            val reviewedAt = Instant.parse("2026-05-10T08:00:00Z")
+            val malformedCardId = "broken-card-id"
+            val canonicalCardId = cardId("broken-card-word", BookCode.CET4.name)
+            seedWord(database, clock, wordId = "broken-card-word", value = "broken", orderIndex = 0)
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "broken-log",
+                    cardId = malformedCardId,
+                    wordId = "broken-card-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Good.wireName,
+                    reviewedAt = reviewedAt,
+                    localDay = "2026-05-10",
+                    elapsedDays = 0,
+                    scheduledDaysBefore = 0,
+                    scheduledDaysAfter = 3,
+                    difficultyBefore = null,
+                    difficultyAfter = 0.82,
+                    stabilityBefore = null,
+                    stabilityAfter = 3.0,
+                    retrievabilityBefore = null,
+                    retrievabilityAfter = 0.82,
+                    durationMs = 500,
+                    targetRetention = 0.82,
+                    algorithm = "fsrs",
+                    algorithmVersion = "test",
+                    stateAfter = ReviewState.Review.name,
+                    dueAtAfter = reviewedAt.plusSeconds(3 * SECONDS_PER_DAY),
+                ),
+            )
+
+            val item = repository.getQueueItem(malformedCardId)
+            val canonicalCard = database.reviewDao().getCard(canonicalCardId)?.toModel()
+            val malformedCard = database.reviewDao().getCard(malformedCardId)
+
+            assertEquals(false, item.isNew)
+            assertEquals(canonicalCardId, item.card.id)
+            assertNotNull(canonicalCard)
+            assertEquals(null, malformedCard)
+            assertEquals(canonicalCardId, canonicalCard?.id)
+            assertEquals(1, canonicalCard?.reviewCount)
+            assertEquals(reviewedAt, canonicalCard?.lastReviewAt)
+            assertEquals(reviewedAt.plusSeconds(3 * SECONDS_PER_DAY), canonicalCard?.dueAt)
         }
-    }
 
-    private class FailingScheduler : ReviewScheduler {
-        override val algorithm: SchedulerAlgorithm = SchedulerAlgorithm.Fsrs
+    @Test
+    fun getQueueItemCanonicalizesMalformedCachedCardId() =
+        runTest {
+            val malformedCardId = "broken-card-id"
+            val canonicalCardId = cardId("broken-card-word", BookCode.CET4.name)
+            val dueAt = Instant.parse("2026-05-19T08:00:00Z")
+            seedWord(database, clock, wordId = "broken-card-word", value = "broken", orderIndex = 0)
+            database.reviewDao().upsertCard(
+                ReviewCardEntity(
+                    id = malformedCardId,
+                    wordId = "broken-card-word",
+                    bookCode = BookCode.CET4.name,
+                    state = ReviewState.Review.name,
+                    difficulty = 0.82,
+                    stability = 3.0,
+                    retrievability = 0.82,
+                    scheduledDays = 3,
+                    dueAt = dueAt,
+                    lastReviewAt = Instant.parse("2026-05-16T08:00:00Z"),
+                    reviewCount = 1,
+                    lapseCount = 0,
+                    firstReviewedAt = Instant.parse("2026-05-16T08:00:00Z"),
+                    createdAt = Instant.parse("2026-05-16T08:00:00Z"),
+                    updatedAt = Instant.parse("2026-05-16T08:00:00Z"),
+                ),
+            )
 
-        override fun schedule(input: ScheduleInput): ScheduleResult = error("scheduler unavailable")
-    }
+            val item = repository.getQueueItem(malformedCardId)
+            val canonicalCard = database.reviewDao().getCard(canonicalCardId)?.toModel()
+            val malformedCard = database.reviewDao().getCard(malformedCardId)
 
-    private companion object {
-        const val WORD_ID = "word-1"
-        const val SECONDS_PER_DAY = 86_400L
-    }
+            assertEquals(false, item.isNew)
+            assertEquals(canonicalCardId, item.card.id)
+            assertNotNull(canonicalCard)
+            assertEquals(null, malformedCard)
+            assertEquals(canonicalCardId, canonicalCard?.id)
+            assertEquals(dueAt, canonicalCard?.dueAt)
+            assertEquals(1, canonicalCard?.reviewCount)
+        }
+
+    @Test
+    fun replayLogsUsesLogicalCardIdentityAcrossRawCardIds() =
+        runTest {
+            val firstReviewedAt = Instant.parse("2026-05-16T08:00:00Z")
+            val secondReviewedAt = Instant.parse("2026-05-16T09:00:00Z")
+            val malformedCardId = "broken-card-id"
+            seedWord(database, clock, wordId = "mixed-card-word", value = "mixed", orderIndex = 0)
+            val canonicalCardId = cardId("mixed-card-word", BookCode.CET4.name)
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "mixed-log-1",
+                    cardId = canonicalCardId,
+                    wordId = "mixed-card-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Good.wireName,
+                    reviewedAt = firstReviewedAt,
+                    localDay = "2026-05-16",
+                    elapsedDays = null,
+                    scheduledDaysBefore = 0,
+                    scheduledDaysAfter = 3,
+                    difficultyBefore = null,
+                    difficultyAfter = 0.8,
+                    stabilityBefore = null,
+                    stabilityAfter = 3.0,
+                    retrievabilityBefore = null,
+                    retrievabilityAfter = 0.8,
+                    durationMs = 500,
+                    targetRetention = 0.8,
+                    algorithm = "fsrs",
+                    algorithmVersion = "test",
+                    stateAfter = ReviewState.Review.name,
+                    dueAtAfter = firstReviewedAt.plusSeconds(3 * SECONDS_PER_DAY),
+                ),
+            )
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "mixed-log-2",
+                    cardId = malformedCardId,
+                    wordId = "mixed-card-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Hard.wireName,
+                    reviewedAt = secondReviewedAt,
+                    localDay = "2026-05-16",
+                    elapsedDays = 0,
+                    scheduledDaysBefore = 3,
+                    scheduledDaysAfter = 4,
+                    difficultyBefore = 0.8,
+                    difficultyAfter = 0.9,
+                    stabilityBefore = 3.0,
+                    stabilityAfter = 4.0,
+                    retrievabilityBefore = 0.8,
+                    retrievabilityAfter = 0.9,
+                    durationMs = 500,
+                    targetRetention = 0.8,
+                    algorithm = "fsrs",
+                    algorithmVersion = "test",
+                    stateAfter = ReviewState.Review.name,
+                    dueAtAfter = secondReviewedAt.plusSeconds(4 * SECONDS_PER_DAY),
+                ),
+            )
+
+            val replayed = repository.replayLogs(malformedCardId)
+
+            assertEquals(canonicalCardId, replayed.id)
+            assertEquals(2, replayed.reviewCount)
+            assertEquals(secondReviewedAt, replayed.lastReviewAt)
+            assertEquals(secondReviewedAt.plusSeconds(4 * SECONDS_PER_DAY), replayed.dueAt)
+        }
+
+    @Test
+    fun repairReviewDataCacheUsesSingleTransactionNow() =
+        runTest {
+            seedWord(database, clock)
+            val id = cardId(WORD_ID, BookCode.CET4.name)
+            repository.submitFeedback(command(id, Instant.parse("2026-05-16T08:00:00Z"), ReviewRating.Good, 0.9))
+
+            val countingClock = CountingClock()
+            val countingRepository =
+                newOfflineReviewRepository(
+                    database = database,
+                    scheduler = scheduler,
+                    clockProvider = countingClock,
+                )
+
+            countingRepository.repairReviewDataCache()
+
+            assertEquals(1, countingClock.nowCallCount)
+        }
+
+    @Test
+    fun inspectAndRepairIncludeDailyStatsCacheMismatches() =
+        runTest {
+            seedWord(database, clock)
+            val id = cardId(WORD_ID, BookCode.CET4.name)
+            val reviewedAt = Instant.parse("2026-05-16T08:00:00Z")
+
+            repository.submitFeedback(command(id, reviewedAt, ReviewRating.Good, 0.9))
+            database.statsDao().upsertDailyStats(
+                DailyStatsEntity(
+                    localDay = "2026-05-16",
+                    newCount = 9,
+                    reviewCount = 9,
+                    againCount = 9,
+                    hardCount = 9,
+                    goodCount = 9,
+                    easyCount = 9,
+                    completedCount = 9,
+                    recallAccuracy = 0.0,
+                    passRate = 0.0,
+                    estimatedMinutes = 9,
+                    updatedAt = reviewedAt.minusSeconds(60),
+                ),
+            )
+
+            val reportBefore = repository.inspectReviewDataIntegrity()
+            val repairResult = repository.repairReviewDataCache()
+            val reportAfter = repairResult.after
+
+            assertEquals(1, reportBefore.dailyStatsDays)
+            assertEquals(1, reportBefore.inconsistentDailyStatsCount)
+            assertEquals(1, reportBefore.repairableIssueCount)
+            assertEquals(1, repairResult.repairedCount)
+            assertEquals(0, reportAfter.inconsistentDailyStatsCount)
+            assertEquals(0, reportAfter.missingDailyStatsCount)
+            assertEquals(0, reportAfter.issueCount)
+            val cachedStats = database.exportDao().dailyStats().single()
+            val derivedStats = database.exportDao().dailyStatsFromLogs().single()
+
+            assertEquals(derivedStats.localDay, cachedStats.localDay)
+            assertEquals(derivedStats.newCount, cachedStats.newCount)
+            assertEquals(derivedStats.reviewCount, cachedStats.reviewCount)
+            assertEquals(derivedStats.againCount, cachedStats.againCount)
+            assertEquals(derivedStats.hardCount, cachedStats.hardCount)
+            assertEquals(derivedStats.goodCount, cachedStats.goodCount)
+            assertEquals(derivedStats.easyCount, cachedStats.easyCount)
+            assertEquals(derivedStats.completedCount, cachedStats.completedCount)
+            assertEquals(derivedStats.recallAccuracy, cachedStats.recallAccuracy, 0.0)
+            assertEquals(derivedStats.passRate, cachedStats.passRate, 0.0)
+            assertEquals(derivedStats.estimatedMinutes, cachedStats.estimatedMinutes)
+        }
+
+    @Test
+    fun inspectAndRepairKeepPendingLogsAsManualIssues() =
+        runTest {
+            val reviewedAt = Instant.parse("2026-05-16T08:00:00Z")
+            seedWord(database, clock, wordId = "pending-word", value = "pending", orderIndex = 0)
+            val pendingCardId = cardId("pending-word", BookCode.CET4.name)
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "pending-log",
+                    cardId = pendingCardId,
+                    wordId = "pending-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Good.wireName,
+                    reviewedAt = reviewedAt,
+                    localDay = "2026-05-16",
+                    elapsedDays = null,
+                    scheduledDaysBefore = 0,
+                    scheduledDaysAfter = null,
+                    difficultyBefore = null,
+                    difficultyAfter = null,
+                    stabilityBefore = null,
+                    stabilityAfter = null,
+                    retrievabilityBefore = null,
+                    retrievabilityAfter = null,
+                    durationMs = 500,
+                    targetRetention = 0.9,
+                    algorithm = "fsrs",
+                    algorithmVersion = PENDING_REVIEW_LOG_VERSION,
+                    stateAfter = null,
+                    dueAtAfter = null,
+                ),
+            )
+            val derivedStats = database.statsDao().dailyStatsFromLogs("2026-05-16", reviewedAt)
+            database.statsDao().upsertDailyStats(checkNotNull(derivedStats))
+
+            val reportBefore = repository.inspectReviewDataIntegrity()
+            val repairResult = repository.repairReviewDataCache()
+            val reportAfter = repairResult.after
+
+            assertEquals(1, reportBefore.cardsWithLogs)
+            assertEquals(1, reportBefore.missingCacheCount)
+            assertEquals(1, reportBefore.legacyLogCardCount)
+            assertEquals(1, reportBefore.manualReviewIssueCount)
+            assertEquals(0, reportBefore.repairableIssueCount)
+            assertEquals(0, repairResult.repairedCount)
+            assertEquals(1, reportAfter.missingCacheCount)
+            assertEquals(1, reportAfter.legacyLogCardCount)
+            assertEquals(1, reportAfter.manualReviewIssueCount)
+            assertEquals(0, reportAfter.repairableIssueCount)
+            assertEquals(null, database.reviewDao().getCard(pendingCardId))
+        }
+
+    @Test
+    fun repairReviewDataCacheCanonicalizesMixedRawCardIdsToSingleLogicalCard() =
+        runTest {
+            val firstReviewedAt = Instant.parse("2026-05-16T08:00:00Z")
+            val secondReviewedAt = Instant.parse("2026-05-16T09:00:00Z")
+            seedWord(database, clock, wordId = "mixed-card-word", value = "mixed", orderIndex = 0)
+            val canonicalCardId = cardId("mixed-card-word", BookCode.CET4.name)
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "mixed-log-1",
+                    cardId = canonicalCardId,
+                    wordId = "mixed-card-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Good.wireName,
+                    reviewedAt = firstReviewedAt,
+                    localDay = "2026-05-16",
+                    elapsedDays = null,
+                    scheduledDaysBefore = 0,
+                    scheduledDaysAfter = 3,
+                    difficultyBefore = null,
+                    difficultyAfter = 0.8,
+                    stabilityBefore = null,
+                    stabilityAfter = 3.0,
+                    retrievabilityBefore = null,
+                    retrievabilityAfter = 0.8,
+                    durationMs = 500,
+                    targetRetention = 0.8,
+                    algorithm = "fsrs",
+                    algorithmVersion = "test",
+                    stateAfter = ReviewState.Review.name,
+                    dueAtAfter = firstReviewedAt.plusSeconds(3 * SECONDS_PER_DAY),
+                ),
+            )
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "mixed-log-2",
+                    cardId = "broken-card-id",
+                    wordId = "mixed-card-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Hard.wireName,
+                    reviewedAt = secondReviewedAt,
+                    localDay = "2026-05-16",
+                    elapsedDays = 0,
+                    scheduledDaysBefore = 3,
+                    scheduledDaysAfter = 4,
+                    difficultyBefore = 0.8,
+                    difficultyAfter = 0.9,
+                    stabilityBefore = 3.0,
+                    stabilityAfter = 4.0,
+                    retrievabilityBefore = 0.8,
+                    retrievabilityAfter = 0.9,
+                    durationMs = 500,
+                    targetRetention = 0.8,
+                    algorithm = "fsrs",
+                    algorithmVersion = "test",
+                    stateAfter = ReviewState.Review.name,
+                    dueAtAfter = secondReviewedAt.plusSeconds(4 * SECONDS_PER_DAY),
+                ),
+            )
+            val derivedStats = database.statsDao().dailyStatsFromLogs("2026-05-16", secondReviewedAt)
+            database.statsDao().upsertDailyStats(checkNotNull(derivedStats))
+
+            val reportBefore = repository.inspectReviewDataIntegrity()
+            val repairResult = repository.repairReviewDataCache()
+            val reportAfter = repairResult.after
+            val canonicalCard = database.reviewDao().getCard(canonicalCardId)?.toModel()
+            val malformedCard = database.reviewDao().getCard("broken-card-id")
+
+            assertEquals(1, reportBefore.cardsWithLogs)
+            assertEquals(1, reportBefore.missingCacheCount)
+            assertEquals(1, reportBefore.malformedLogCardCount)
+            assertEquals(1, reportBefore.manualReviewIssueCount)
+            assertEquals(1, reportBefore.repairableIssueCount)
+            assertEquals(1, repairResult.repairedCount)
+            assertEquals(0, reportAfter.missingCacheCount)
+            assertEquals(1, reportAfter.malformedLogCardCount)
+            assertEquals(1, reportAfter.manualReviewIssueCount)
+            assertEquals(0, reportAfter.repairableIssueCount)
+            assertNotNull(canonicalCard)
+            assertEquals(null, malformedCard)
+            assertEquals(2, canonicalCard?.reviewCount)
+            assertEquals(secondReviewedAt, canonicalCard?.lastReviewAt)
+            assertEquals(secondReviewedAt.plusSeconds(4 * SECONDS_PER_DAY), canonicalCard?.dueAt)
+        }
+
+    @Test
+    fun inspectAndRepairKeepSnapshotTimelineConflictsAsManualIssues() =
+        runTest {
+            val earlierReviewAt = Instant.parse("2026-05-16T09:00:00Z")
+            val laterReviewAt = Instant.parse("2026-05-16T10:00:00Z")
+            seedWord(database, clock, wordId = "timeline-word", value = "timeline", orderIndex = 0)
+            val timelineCardId = cardId("timeline-word", BookCode.CET4.name)
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "timeline-log-later",
+                    cardId = timelineCardId,
+                    wordId = "timeline-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Good.wireName,
+                    reviewedAt = laterReviewAt,
+                    localDay = "2026-05-16",
+                    elapsedDays = null,
+                    scheduledDaysBefore = 0,
+                    scheduledDaysAfter = 3,
+                    difficultyBefore = null,
+                    difficultyAfter = 0.8,
+                    stabilityBefore = null,
+                    stabilityAfter = 3.0,
+                    retrievabilityBefore = null,
+                    retrievabilityAfter = 0.8,
+                    durationMs = 500,
+                    targetRetention = 0.8,
+                    algorithm = "fsrs",
+                    algorithmVersion = "test",
+                    stateAfter = ReviewState.Review.name,
+                    dueAtAfter = laterReviewAt.plusSeconds(3 * SECONDS_PER_DAY),
+                ),
+            )
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "timeline-log-earlier",
+                    cardId = timelineCardId,
+                    wordId = "timeline-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Hard.wireName,
+                    reviewedAt = earlierReviewAt,
+                    localDay = "2026-05-16",
+                    elapsedDays = 0,
+                    scheduledDaysBefore = 3,
+                    scheduledDaysAfter = 4,
+                    difficultyBefore = 0.8,
+                    difficultyAfter = 0.9,
+                    stabilityBefore = 3.0,
+                    stabilityAfter = 4.0,
+                    retrievabilityBefore = 0.8,
+                    retrievabilityAfter = 0.9,
+                    durationMs = 500,
+                    targetRetention = 0.8,
+                    algorithm = "fsrs",
+                    algorithmVersion = "test",
+                    stateAfter = ReviewState.Review.name,
+                    dueAtAfter = earlierReviewAt.plusSeconds(4 * SECONDS_PER_DAY),
+                ),
+            )
+
+            val repairResult = repository.repairReviewDataCache()
+            val reportAfter = repairResult.after
+            val repairedCard = database.reviewDao().getCard(timelineCardId)?.toModel()
+
+            assertEquals(1, repairResult.timelineConflictCacheRebuiltCount)
+            assertEquals(1, reportAfter.timelineConflictCardCount)
+            assertEquals(1, reportAfter.manualReviewIssueCount)
+            assertEquals(0, reportAfter.repairableIssueCount)
+            assertNotNull(repairedCard)
+            assertEquals(laterReviewAt, repairedCard?.lastReviewAt)
+            assertEquals(2, repairedCard?.reviewCount)
+        }
 }
+
+private const val PENDING_REVIEW_LOG_VERSION = "<pending>"

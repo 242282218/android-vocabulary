@@ -1,4 +1,6 @@
 import io.gitlab.arturbosch.detekt.extensions.DetektExtension
+import org.gradle.api.GradleException
+import org.owasp.dependencycheck.gradle.extension.DependencyCheckExtension
 
 plugins {
     alias(libs.plugins.android.application) apply false
@@ -11,6 +13,7 @@ plugins {
     alias(libs.plugins.hilt) apply false
     alias(libs.plugins.detekt) apply false
     alias(libs.plugins.ktlint) apply false
+    alias(libs.plugins.owasp.dependency.check) apply true
 }
 
 subprojects {
@@ -32,3 +35,41 @@ subprojects {
         config.setFrom(rootProject.files("detekt.yml"))
     }
 }
+
+val nvdApiKeyProvider =
+    providers
+        .gradleProperty("nvdApiKey")
+        .orElse(providers.environmentVariable("NVD_API_KEY"))
+
+configure<DependencyCheckExtension> {
+    failBuildOnCVSS = 7.0f
+    outputDirectory = layout.buildDirectory.dir("reports/dependency-check").get().asFile.absolutePath
+    formats = listOf("HTML", "JSON")
+    scanConfigurations = listOf("runtimeClasspath", "releaseRuntimeClasspath")
+    val nvdApiKey = nvdApiKeyProvider.orNull
+    if (!nvdApiKey.isNullOrBlank()) {
+        nvd.apiKey = nvdApiKey
+    }
+    val dependencyCheckSuppressions = file("owasp-suppressions.xml")
+    if (dependencyCheckSuppressions.exists()) {
+        suppressionFile = dependencyCheckSuppressions.absolutePath
+    }
+}
+
+tasks
+    .matching { task ->
+        task.name in
+            setOf(
+                "dependencyCheckAggregate",
+                "dependencyCheckAnalyze",
+                "dependencyCheckUpdate"
+            )
+    }.configureEach {
+        doFirst {
+            if (nvdApiKeyProvider.orNull.isNullOrBlank()) {
+                throw GradleException(
+                    "NVD API key is required for $name. Set NVD_API_KEY or pass -PnvdApiKey=<key>."
+                )
+            }
+        }
+    }
