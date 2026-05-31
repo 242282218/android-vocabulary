@@ -2,7 +2,10 @@ package com.zzz.androidvocab.feature.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.zzz.androidvocab.core.common.AppError
+import com.zzz.androidvocab.core.common.AppException
 import com.zzz.androidvocab.core.common.toUserMessage
+import com.zzz.androidvocab.core.common.userMessage
 import com.zzz.androidvocab.core.domain.ExportUserDataUseCase
 import com.zzz.androidvocab.core.domain.InspectReviewDataIntegrityUseCase
 import com.zzz.androidvocab.core.domain.ObserveSettingsUseCase
@@ -12,6 +15,7 @@ import com.zzz.androidvocab.core.domain.VocabularyRepository
 import com.zzz.androidvocab.core.model.AppSettings
 import com.zzz.androidvocab.core.model.ExportResult
 import com.zzz.androidvocab.core.model.ReviewDataIntegrityReport
+import com.zzz.androidvocab.core.model.ReviewDataRepairResult
 import com.zzz.androidvocab.core.model.SourceInfo
 import com.zzz.androidvocab.core.model.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -29,6 +33,8 @@ data class SettingsUiState(
     val exportResult: ExportResult? = null,
     val exportErrorMessage: String? = null,
     val isExporting: Boolean = false,
+    val learningSettingsErrorMessage: String? = null,
+    val themeErrorMessage: String? = null,
     val reminderErrorMessage: String? = null,
     val dataMaintenance: DataMaintenanceUiState = DataMaintenanceUiState(),
 )
@@ -38,7 +44,9 @@ data class DataMaintenanceUiState(
     val message: String? = null,
     val errorMessage: String? = null,
     val inProgress: Boolean = false,
-)
+) {
+    val hasRepairableIssues: Boolean = (report?.repairableIssueCount ?: 0) > 0
+}
 
 private data class ExportUiState(
     val result: ExportResult? = null,
@@ -60,6 +68,8 @@ class SettingsViewModel
         private val exportResult = MutableStateFlow<ExportResult?>(null)
         private val exportErrorMessage = MutableStateFlow<String?>(null)
         private val isExporting = MutableStateFlow(false)
+        private val learningSettingsErrorMessage = MutableStateFlow<String?>(null)
+        private val themeErrorMessage = MutableStateFlow<String?>(null)
         private val reminderErrorMessage = MutableStateFlow<String?>(null)
         private val dataMaintenance = MutableStateFlow(DataMaintenanceUiState())
 
@@ -71,14 +81,24 @@ class SettingsViewModel
                     observeSettingsUseCase(),
                     vocabularyRepository.observeSourceInfo(),
                     exportState,
+                ) { settings, sources, export ->
+                    Triple(settings, sources, export)
+                }
+            }.let { baseState ->
+                combine(
+                    baseState,
+                    learningSettingsErrorMessage,
+                    themeErrorMessage,
                     reminderErrorMessage,
-                ) { settings, sources, export, reminderError ->
+                ) { base, learningSettingsError, themeError, reminderError ->
                     SettingsUiState(
-                        settings = settings,
-                        sources = sources,
-                        exportResult = export.result,
-                        exportErrorMessage = export.errorMessage,
-                        isExporting = export.inProgress,
+                        settings = base.first,
+                        sources = base.second,
+                        exportResult = base.third.result,
+                        exportErrorMessage = base.third.errorMessage,
+                        isExporting = base.third.inProgress,
+                        learningSettingsErrorMessage = learningSettingsError,
+                        themeErrorMessage = themeError,
                         reminderErrorMessage = reminderError,
                     )
                 }
@@ -89,21 +109,54 @@ class SettingsViewModel
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
         fun updateDailyLimit(value: Int) {
-            viewModelScope.launch { updateSettingsUseCase.dailyNewLimit(value) }
+            viewModelScope.launch {
+                learningSettingsErrorMessage.value = null
+                try {
+                    updateSettingsUseCase.dailyNewLimit(value)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    learningSettingsErrorMessage.value = e.toLearningSettingsMessage()
+                }
+            }
         }
 
         fun updateTheme(themeMode: ThemeMode) {
-            viewModelScope.launch { updateSettingsUseCase.themeMode(themeMode) }
+            viewModelScope.launch {
+                themeErrorMessage.value = null
+                try {
+                    updateSettingsUseCase.themeMode(themeMode)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    themeErrorMessage.value = e.toThemeSettingsMessage()
+                }
+            }
         }
 
         fun updateTargetRetention(value: Double) {
-            viewModelScope.launch { updateSettingsUseCase.targetRetention(value) }
+            viewModelScope.launch {
+                learningSettingsErrorMessage.value = null
+                try {
+                    updateSettingsUseCase.targetRetention(value)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    learningSettingsErrorMessage.value = e.toLearningSettingsMessage()
+                }
+            }
         }
 
         fun updateReminder(enabled: Boolean) {
             viewModelScope.launch {
-                updateSettingsUseCase.reminderEnabled(enabled)
                 reminderErrorMessage.value = null
+                try {
+                    updateSettingsUseCase.reminderEnabled(enabled)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    reminderErrorMessage.value = e.toReminderSettingsMessage()
+                }
             }
         }
 
@@ -112,8 +165,14 @@ class SettingsViewModel
             minute: Int,
         ) {
             viewModelScope.launch {
-                updateSettingsUseCase.reminderTime(hour, minute)
                 reminderErrorMessage.value = null
+                try {
+                    updateSettingsUseCase.reminderTime(hour, minute)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    reminderErrorMessage.value = e.toReminderSettingsMessage()
+                }
             }
         }
 
@@ -140,8 +199,13 @@ class SettingsViewModel
         }
 
         fun inspectLearningData() {
+            if (dataMaintenance.value.inProgress) return
+            dataMaintenance.value =
+                dataMaintenance.value.copy(
+                    inProgress = true,
+                    errorMessage = null,
+                )
             viewModelScope.launch {
-                dataMaintenance.value = dataMaintenance.value.copy(inProgress = true, errorMessage = null)
                 try {
                     val report = inspectReviewDataIntegrityUseCase()
                     dataMaintenance.value =
@@ -153,7 +217,8 @@ class SettingsViewModel
                     throw e
                 } catch (e: Exception) {
                     dataMaintenance.value =
-                        DataMaintenanceUiState(
+                        dataMaintenance.value.copy(
+                            inProgress = false,
                             errorMessage = e.toUserMessage("学习数据检查失败"),
                         )
                 }
@@ -161,22 +226,26 @@ class SettingsViewModel
         }
 
         fun repairLearningData() {
+            if (dataMaintenance.value.inProgress) return
+            dataMaintenance.value =
+                dataMaintenance.value.copy(
+                    inProgress = true,
+                    errorMessage = null,
+                )
             viewModelScope.launch {
-                dataMaintenance.value = dataMaintenance.value.copy(inProgress = true, errorMessage = null)
                 try {
                     val result = repairReviewDataCacheUseCase()
                     dataMaintenance.value =
                         DataMaintenanceUiState(
                             report = result.after,
-                            message =
-                                "已修复 ${result.repairedCount} 项，剩余可修复 ${result.after.repairableIssueCount} 项，" +
-                                    "需人工确认 ${result.after.manualReviewIssueCount} 项。",
+                            message = result.toUserMessage(),
                         )
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     dataMaintenance.value =
-                        DataMaintenanceUiState(
+                        dataMaintenance.value.copy(
+                            inProgress = false,
                             errorMessage = e.toUserMessage("学习数据修复失败"),
                         )
                 }
@@ -184,10 +253,75 @@ class SettingsViewModel
         }
     }
 
+private fun ReviewDataRepairResult.toUserMessage(): String {
+    val baseMessage =
+        "已修复 $repairedCount 项，剩余可修复 ${after.repairableIssueCount} 项，" +
+            "需人工确认 ${after.manualReviewIssueCount} 项。"
+    return if (timelineConflictCacheRebuiltCount > 0) {
+        baseMessage +
+            "其中时间线异常 $timelineConflictCacheRebuiltCount 项仅重建缓存，" +
+            "仍需人工确认；本次不修改复习日志。"
+    } else {
+        baseMessage
+    }
+}
+
+private fun Throwable.toReminderSettingsMessage(): String =
+    when (this) {
+        is AppException ->
+            when (error) {
+                is AppError.DatabaseWriteFailed ->
+                    "提醒设置保存失败：${(error as AppError.DatabaseWriteFailed).reason}"
+                else -> error.userMessage
+            }
+        else -> message ?: "提醒设置保存失败"
+    }
+
+private fun Throwable.toLearningSettingsMessage(): String =
+    when (this) {
+        is AppException ->
+            when (error) {
+                is AppError.DatabaseWriteFailed ->
+                    "学习设置保存失败：${(error as AppError.DatabaseWriteFailed).reason}"
+                else -> error.userMessage
+            }
+        else -> message ?: "学习设置保存失败"
+    }
+
+private fun Throwable.toThemeSettingsMessage(): String =
+    when (this) {
+        is AppException ->
+            when (error) {
+                is AppError.DatabaseWriteFailed ->
+                    "外观设置保存失败：${(error as AppError.DatabaseWriteFailed).reason}"
+                else -> error.userMessage
+            }
+        else -> message ?: "外观设置保存失败"
+    }
+
 private fun ReviewDataIntegrityReport.toUserMessage(): String =
     if (issueCount == 0) {
         "学习数据缓存一致。已检查 $cardsWithLogs 张有记录卡片。"
     } else {
-        "已检查 $cardsWithLogs 张：可修复 $repairableIssueCount 项，需人工确认 $manualReviewIssueCount 项。" +
-            "缺失缓存 $missingCacheCount，不一致 $inconsistentCacheCount，旧日志 $legacyLogCardCount，孤儿日志 $orphanLogCount。"
+        val statsSummary =
+            if (missingDailyStatsCount > 0 || inconsistentDailyStatsCount > 0) {
+                "，日统计 $dailyStatsDays 天：缺失 $missingDailyStatsCount，不一致 $inconsistentDailyStatsCount"
+            } else {
+                ""
+            }
+        val timelineSummary =
+            if (timelineConflictCardCount > 0) {
+                "，时间线异常 $timelineConflictCardCount"
+            } else {
+                ""
+            }
+        if (statsSummary.isEmpty()) {
+            "已检查 $cardsWithLogs 张：可修复 $repairableIssueCount 项，需人工确认 $manualReviewIssueCount 项。" +
+                "缺失缓存 $missingCacheCount，不一致 $inconsistentCacheCount，" +
+                "旧日志 $legacyLogCardCount，孤儿日志 $orphanLogCount$timelineSummary。"
+        } else {
+            "已检查 $cardsWithLogs 张卡$statsSummary：可修复 $repairableIssueCount 项，需人工确认 $manualReviewIssueCount 项。" +
+                "缺失缓存 $missingCacheCount，不一致 $inconsistentCacheCount，" +
+                "旧日志 $legacyLogCardCount，孤儿日志 $orphanLogCount$timelineSummary。"
+        }
     }
