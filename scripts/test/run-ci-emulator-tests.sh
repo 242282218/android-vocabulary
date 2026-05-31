@@ -46,6 +46,17 @@ disable_animations() {
   adb shell settings put global animator_duration_scale 0 || true
 }
 
+set_avd_config() {
+  local key="$1"
+  local value="$2"
+  local config_path="$ANDROID_AVD_HOME/$AVD_NAME.avd/config.ini"
+  if grep -q "^${key}=" "$config_path"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$config_path"
+  else
+    printf '%s=%s\n' "$key" "$value" >>"$config_path"
+  fi
+}
+
 trap cleanup EXIT
 
 sdkmanager "$SYSTEM_IMAGE"
@@ -54,7 +65,11 @@ echo "no" | avdmanager create avd \
   --name "$AVD_NAME" \
   --package "$SYSTEM_IMAGE" \
   --device "$DEVICE_PROFILE"
+set_avd_config "disk.dataPartition.size" "1024M"
+set_avd_config "hw.ramSize" "1536"
+set_avd_config "sdcard.size" "128M"
 avdmanager list avd
+grep -E '^(disk\.dataPartition\.size|hw\.ramSize|sdcard\.size)=' "$ANDROID_AVD_HOME/$AVD_NAME.avd/config.ini" || true
 
 "$ANDROID_HOME/emulator/emulator" -accel-check | tee "$REPORT_DIR/accel-check.txt" || true
 "$ANDROID_HOME/emulator/emulator" \
