@@ -715,6 +715,11 @@ function Test-GitHubActionsEvidenceWriter {
 
 function Test-ReleaseReadinessPositiveFixture {
     $testRoot = Join-Path $tmpRoot 'release-readiness-positive'
+    $fixtureVersionName = Get-GradlePropertyValue 'androidVocab.versionName'
+    $fixtureVersionCode = Get-GradlePropertyValue 'androidVocab.versionCode'
+    $fixtureVersionLabel = "v$fixtureVersionName-$fixtureVersionCode"
+    $fixtureReleaseApkName = "AndroidVocabulary-release-$fixtureVersionLabel.apk"
+    $fixtureReleaseBundleName = "AndroidVocabulary-release-$fixtureVersionLabel.aab"
     Remove-TestRootSafely $testRoot
     Copy-TestScriptRepo -TargetRoot $testRoot -TestScripts @('verify-release-readiness.ps1')
 
@@ -722,14 +727,14 @@ function Test-ReleaseReadinessPositiveFixture {
         -LiteralPath (Join-Path $testRoot 'gradle.properties') `
         -Encoding Ascii `
         -Value @(
-            'androidVocab.versionCode=1',
-            'androidVocab.versionName=0.1.0'
+            "androidVocab.versionCode=$fixtureVersionCode",
+            "androidVocab.versionName=$fixtureVersionName"
         )
 
     $distDir = Join-Path $testRoot 'dist'
     New-Item -ItemType Directory -Force -Path $distDir | Out-Null
-    $releaseApk = Join-Path $distDir 'AndroidVocabulary-release-v0.1.0-1.apk'
-    $releaseBundle = Join-Path $distDir 'AndroidVocabulary-release-v0.1.0-1.aab'
+    $releaseApk = Join-Path $distDir $fixtureReleaseApkName
+    $releaseBundle = Join-Path $distDir $fixtureReleaseBundleName
     Set-Content -LiteralPath $releaseApk -Encoding Ascii -Value 'release apk fixture'
     Set-Content -LiteralPath $releaseBundle -Encoding Ascii -Value 'release bundle fixture'
     $releaseApkSha256 = (Get-FileHash -LiteralPath $releaseApk -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -739,8 +744,8 @@ function Test-ReleaseReadinessPositiveFixture {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $releaseArtifactsPath) | Out-Null
     $successfulReleaseArtifactsMetadata = @(
         'runStatus=completed',
-        'versionName=0.1.0',
-        'versionCode=1',
+        "versionName=$fixtureVersionName",
+        "versionCode=$fixtureVersionCode",
         "releaseApk=$releaseApk",
         'releaseApkStatus=verified',
         "releaseApkSha256=$releaseApkSha256",
@@ -755,22 +760,22 @@ function Test-ReleaseReadinessPositiveFixture {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $apkSmokePath) | Out-Null
     $successfulApkSmokeMetadata = @(
         'runStatus=completed',
-        'versionName=0.1.0',
-        'versionCode=1',
+        "versionName=$fixtureVersionName",
+        "versionCode=$fixtureVersionCode",
         'skipInstall=False',
         'apkPathMatchesCurrentVersionedName=True',
         "apkSha256=$releaseApkSha256"
     )
     Write-Utf8NoBomLines -Path $apkSmokePath -Lines $successfulApkSmokeMetadata
 
-    $deviceDir = Join-AndroidVocabularyPath $testRoot @('build', 'device-verification', 'v0.1.0-1-fixture')
+    $deviceDir = Join-AndroidVocabularyPath $testRoot @('build', 'device-verification', "$fixtureVersionLabel-fixture")
     New-Item -ItemType Directory -Force -Path $deviceDir | Out-Null
     $deviceCompletedPath = Join-Path $deviceDir 'verification-completed.txt'
     $bundleSmokePath = Join-Path $deviceDir 'smoke-release-bundle-run.txt'
     $successfulBundleSmokeMetadata = @(
         'runStatus=completed',
-        'versionName=0.1.0',
-        'versionCode=1',
+        "versionName=$fixtureVersionName",
+        "versionCode=$fixtureVersionCode",
         'bundlePathMatchesCurrentVersionedName=True',
         'bundleSmokeReleaseReady=True',
         'apkSetSigning=release-signing',
@@ -779,8 +784,8 @@ function Test-ReleaseReadinessPositiveFixture {
     Write-Utf8NoBomLines -Path $bundleSmokePath -Lines $successfulBundleSmokeMetadata
     $successfulDeviceVerificationMetadata = @(
         'runStatus=completed',
-        'versionName=0.1.0',
-        'versionCode=1',
+        "versionName=$fixtureVersionName",
+        "versionCode=$fixtureVersionCode",
         'usesLocalOnlyReleaseOverrides=False',
         'bundlePathMatchesCurrentVersionedName=True',
         "bundleSha256=$releaseBundleSha256",
@@ -886,12 +891,12 @@ function Test-ReleaseReadinessPositiveFixture {
             }
         }
 
-        $staleDeviceDir = Join-AndroidVocabularyPath $testRoot @('build', 'device-verification', 'v0.1.0-1-stale')
+        $staleDeviceDir = Join-AndroidVocabularyPath $testRoot @('build', 'device-verification', "$fixtureVersionLabel-stale")
         New-Item -ItemType Directory -Force -Path $staleDeviceDir | Out-Null
         Write-Utf8NoBomLines -Path (Join-Path $staleDeviceDir 'verification-completed.txt') -Lines @(
             'runStatus=completed',
-            'versionName=0.1.0',
-            'versionCode=1',
+            "versionName=$fixtureVersionName",
+            "versionCode=$fixtureVersionCode",
             'usesLocalOnlyReleaseOverrides=False',
             'bundlePathMatchesCurrentVersionedName=True',
             'bundleSha256=0000000000000000000000000000000000000000000000000000000000000000',
@@ -922,11 +927,11 @@ function Test-ReleaseReadinessPositiveFixture {
             Assert-ContainsPattern -Lines $metadata -Pattern "^$([regex]::Escape($line))"
         }
 
-        $staleArtifactNames = 'AndroidVocabulary-release-v0.1.0-1.aab, AndroidVocabulary-release-v0.1.0-1.apk'
+        $staleArtifactNames = "$fixtureReleaseBundleName, $fixtureReleaseApkName"
         Write-Utf8NoBomLines -Path $releaseArtifactsPath -Lines @(
             'runStatus=failed',
-            'versionName=0.1.0',
-            'versionCode=1',
+            "versionName=$fixtureVersionName",
+            "versionCode=$fixtureVersionCode",
             "releaseApk=$releaseApk",
             'releaseApkStatus=failed',
             "releaseApkSha256=$releaseApkSha256",
@@ -968,8 +973,8 @@ function Test-ReleaseReadinessPositiveFixture {
 
         Write-Utf8NoBomLines -Path $releaseArtifactsPath -Lines @(
             'runStatus=failed',
-            'versionName=0.1.0',
-            'versionCode=1',
+            "versionName=$fixtureVersionName",
+            "versionCode=$fixtureVersionCode",
             "releaseApk=$releaseApk",
             'releaseApkStatus=failed',
             "releaseApkSha256=$releaseApkSha256",
@@ -981,16 +986,16 @@ function Test-ReleaseReadinessPositiveFixture {
         )
         Write-Utf8NoBomLines -Path $apkSmokePath -Lines @(
             'runStatus=failed',
-            'versionName=0.1.0',
-            'versionCode=1',
+            "versionName=$fixtureVersionName",
+            "versionCode=$fixtureVersionCode",
             'skipInstall=False',
             'apkPathMatchesCurrentVersionedName=False',
             'apkSha256=0000000000000000000000000000000000000000000000000000000000000000'
         )
         Write-Utf8NoBomLines -Path $deviceCompletedPath -Lines @(
             'runStatus=failed',
-            'versionName=0.1.0',
-            'versionCode=1',
+            "versionName=$fixtureVersionName",
+            "versionCode=$fixtureVersionCode",
             'usesLocalOnlyReleaseOverrides=False',
             'bundlePathMatchesCurrentVersionedName=False',
             'bundleSha256=0000000000000000000000000000000000000000000000000000000000000000',
@@ -1003,8 +1008,8 @@ function Test-ReleaseReadinessPositiveFixture {
         )
         Write-Utf8NoBomLines -Path $bundleSmokePath -Lines @(
             'runStatus=failed',
-            'versionName=0.1.0',
-            'versionCode=1',
+            "versionName=$fixtureVersionName",
+            "versionCode=$fixtureVersionCode",
             'bundlePathMatchesCurrentVersionedName=False',
             'bundleSmokeReleaseReady=False',
             'apkSetSigning=debug-signing',

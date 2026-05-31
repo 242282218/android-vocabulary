@@ -135,8 +135,8 @@ class AndroidExportRepository
         private fun appVersion(): String =
             runCatching {
                 val info = context.packageManager.getPackageInfo(context.packageName, 0)
-                info.versionName ?: "0.1.0"
-            }.getOrDefault("0.1.0")
+                info.versionName ?: "unknown"
+            }.getOrDefault("unknown")
 
         private suspend fun inspectDataIntegrity(): JsonObject =
             runCatching { reviewRepository.inspectReviewDataIntegrity().toJson() }
