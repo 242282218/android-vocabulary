@@ -70,10 +70,10 @@ GitHub Actions 执行：
 
 - `scripts/test/verify-release-scripts.ps1`
 - `scripts/test/verify-vocab-assets.ps1`
-- `./gradlew dependencyCheckAggregate`
 - `./gradlew ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest pixel2Api30DebugAndroidTest`
+- 配置 `NVD_API_KEY` 时执行 `./gradlew dependencyCheckAggregate`
 
-`dependencyCheckAggregate` 需要 NVD API key；本地设置 `NVD_API_KEY` 环境变量，或传入 `-PnvdApiKey=<key>`。GitHub Actions 需要配置同名 repository secret；未设置时 Gradle 会在 dependency-check 任务开始前直接失败。
+`dependencyCheckAggregate` 需要 NVD API key；本地设置 `NVD_API_KEY` 环境变量，或传入 `-PnvdApiKey=<key>`。GitHub Actions 未配置同名 repository secret 时会跳过该可选漏洞扫描，避免把缺少外部 secret 误判为代码验证失败；直接运行 dependency-check 任务但未设置 key 时，Gradle 仍会 fail-fast。
 
 有设备或模拟器时再运行：
 
@@ -114,7 +114,7 @@ repository=<owner>/<repo>
 runId=<github run id>
 runAttempt=<github run attempt>
 runUrl=https://github.com/<owner>/<repo>/actions/runs/<github run id>
-checks=verify-release-scripts, verify-vocab-assets, dependencyCheckAggregate, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest
+checks=verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest
 ```
 
 `verify-release-readiness.ps1` 会同时校验 `serverUrl`、`repository`、`runId` 和 `runUrl` 是否一致，并要求 `serverUrl=https://github.com`，避免误用其他仓库或其他 GitHub 实例的 workflow 结果。

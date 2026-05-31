@@ -182,7 +182,7 @@ function Test-ReleaseReadinessDocumentation {
         'runId=<github run id>',
         'runAttempt=<github run attempt>',
         'runUrl=https://github.com/<owner>/<repo>/actions/runs/<github run id>',
-        'checks=verify-release-scripts, verify-vocab-assets, dependencyCheckAggregate, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest',
+        'checks=verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest',
         'verify-release-readiness.ps1'
     )
 
@@ -266,7 +266,7 @@ function Test-ReleaseArtifactNaming {
     Assert-Equal `
         -Name 'required GitHub Actions checks' `
         -Actual ((Get-AndroidVocabularyRequiredGitHubActionsChecks) -join ', ') `
-        -Expected 'verify-release-scripts, verify-vocab-assets, dependencyCheckAggregate, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest'
+        -Expected 'verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest'
 
     $releaseScript = Get-Content `
         -LiteralPath (Join-AndroidVocabularyPath $repoRoot @('scripts', 'release', 'build-release.ps1')) `
@@ -638,6 +638,8 @@ function Test-ReleaseArtifactNaming {
             'name: Android',
             'run: ./scripts/test/verify-release-scripts.ps1',
             'run: ./scripts/test/verify-vocab-assets.ps1',
+            'NVD_API_KEY: ${{ secrets.NVD_API_KEY }}',
+            'if: ${{ env.NVD_API_KEY != '''' }}',
             'run: ./gradlew --no-daemon --console=plain dependencyCheckAggregate',
             'ktlintCheck detekt testDebugUnitTest assembleDebug assembleDebugAndroidTest pixel2Api30DebugAndroidTest',
             'run: ./scripts/test/write-github-actions-evidence.ps1',

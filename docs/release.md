@@ -229,12 +229,12 @@ repository=<owner>/<repo>
 runId=<github run id>
 runAttempt=<github run attempt>
 runUrl=https://github.com/<owner>/<repo>/actions/runs/<github run id>
-checks=verify-release-scripts, verify-vocab-assets, dependencyCheckAggregate, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest
+checks=verify-release-scripts, verify-vocab-assets, ktlintCheck, detekt, testDebugUnitTest, assembleDebug, assembleDebugAndroidTest, pixel2Api30DebugAndroidTest
 ```
 
 `verify-release-readiness.ps1` 会同时校验 `serverUrl`、`repository`、`runId` 和 `runUrl` 是否一致，并要求 `serverUrl=https://github.com`，避免误用其他仓库或其他 GitHub 实例的 workflow 结果。
 
-`dependencyCheckAggregate` 依赖 NVD API key。CI 必须配置 `NVD_API_KEY` repository secret；本地可设置同名环境变量，或传入 `-PnvdApiKey=<key>`。未设置时 Gradle 会在 dependency-check 任务开始前直接失败，避免退化为慢速 NVD 403/404。
+`dependencyCheckAggregate` 依赖 NVD API key。CI 配置 `NVD_API_KEY` repository secret 后会执行该可选漏洞扫描；未配置时 GitHub Actions 会跳过它，避免把缺少外部 secret 误判为代码验证失败。本地可设置同名环境变量，或传入 `-PnvdApiKey=<key>`；直接运行 dependency-check 任务但未设置 key 时，Gradle 仍会 fail-fast，避免退化为慢速 NVD 403/404。
 
 11. 运行 `.\scripts\test\verify-release-readiness.ps1 -GitHubActionsEvidencePath .\build\release-readiness\github-actions-evidence.txt -ReleaseArtifactsEvidencePath .\build\release-artifacts\release-artifacts-run.txt -ApkSmokeEvidencePath .\build\apk-smoke\smoke-release-apk-run.txt -DeviceVerificationEvidencePath .\build\device-verification\v<versionName>-<versionCode>-<timestamp>\verification-completed.txt`，确认输出 `[ok] release readiness verified`；该门禁会要求当前 Git worktree 干净，避免本地 release 产物来自未经 CI 验证的源码状态；同时会重算当前 `dist/` release 产物 SHA-256 并与第 8 步审计记录比对，也会要求 APK smoke metadata 中的 `apkSha256` 与 release APK 一致、设备 AAB 验收 metadata 中的 `bundleSha256`、父日志摘要里的 `bundleSmokeBundleSha256` 以及归档 bundle smoke 子日志原文里的 `bundleSha256` 都与 release AAB 一致。未传 `-ReleaseArtifactsEvidencePath` / `-ApkSmokeEvidencePath` 时会沿用默认 metadata；未传 `-DeviceVerificationEvidencePath` 时会从设备验收完成记录中选择最新且匹配当前版本和 release AAB SHA-256 的记录。正式发布建议显式传入本次保留的三个本地 evidence 文件；readiness 会把本次读取到的 evidence 复制到 `build\release-readiness\evidence-*.txt` 并记录归档文件 SHA-256，包括设备验收父日志及其指向的 bundle smoke 子日志，同时在 `evidenceArchives` 中汇总归档清单。失败时 metadata 会按 requirement 写入 `*Remediation` 字段，指出下一步修复动作。
 12. 保留 `dist/AndroidVocabulary-release-v<versionName>-<versionCode>.apk`、`dist/AndroidVocabulary-release-v<versionName>-<versionCode>.aab`、`build/release-artifacts/release-artifacts-run.txt`、`build/release-readiness/release-readiness-run.txt`、`build/release-readiness/evidence-*.txt`、GitHub Actions 结果和 `build/device-verification/v<versionName>-<versionCode>-<timestamp>/` 日志作为本次 release 验证记录。

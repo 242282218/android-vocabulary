@@ -63,7 +63,6 @@ function Get-AndroidVocabularyRequiredGitHubActionsChecks {
     return @(
         'verify-release-scripts',
         'verify-vocab-assets',
-        'dependencyCheckAggregate',
         'ktlintCheck',
         'detekt',
         'testDebugUnitTest',
