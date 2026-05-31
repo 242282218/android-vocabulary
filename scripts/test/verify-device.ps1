@@ -17,6 +17,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path (Join-Path $PSScriptRoot '..') (Join-Path 'lib' 'android-env.ps1'))
 $repoRoot = Get-AndroidVocabularyRepoRoot
 $adb = $null
+$packageName = 'com.zzz.androidvocab'
 
 function Invoke-AdbDevicesCommand {
     param([string[]]$Arguments)
@@ -155,6 +156,31 @@ function Save-LogcatTail {
     } catch {
         Write-Warning "Failed to save logcat tail: $($_.Exception.Message)"
     }
+}
+
+function Uninstall-AppIfPresent {
+    param([string]$ResolvedDeviceSerial)
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & $adb -s $ResolvedDeviceSerial uninstall $packageName 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    $outputText = @($output | ConvertTo-AndroidVocabularyOutputText)
+    $combinedOutput = ($outputText -join ' ').Trim()
+    if ($exitCode -eq 0) {
+        Write-Host "[info] uninstalled existing $packageName before release bundle smoke"
+        return
+    }
+    if ($combinedOutput -match 'not installed|Unknown package') {
+        Write-Host "[info] $packageName was not installed before release bundle smoke"
+        return
+    }
+    throw "Failed to uninstall $packageName before release bundle smoke: $combinedOutput"
 }
 
 function Save-ApkSmokeFailureArtifacts {
@@ -599,6 +625,10 @@ try {
         }
 
         if (-not $SkipBundleSmoke) {
+            if (-not $SkipConnectedTests) {
+                Uninstall-AppIfPresent $resolvedDeviceSerial
+            }
+
             if (-not $SkipBundleBuild) {
                 $script:CurrentVerificationStage = 'buildReleaseBundle'
                 $bundleBuildParams = @{}

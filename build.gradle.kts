@@ -1,5 +1,6 @@
 import io.gitlab.arturbosch.detekt.extensions.DetektExtension
 import org.gradle.api.GradleException
+import org.gradle.api.tasks.testing.Test
 import org.owasp.dependencycheck.gradle.extension.DependencyCheckExtension
 
 plugins {
@@ -33,6 +34,13 @@ subprojects {
     extensions.configure<DetektExtension>("detekt") {
         buildUponDefaultConfig = true
         config.setFrom(rootProject.files("detekt.yml"))
+    }
+
+    tasks.withType<Test>().configureEach {
+        if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+            // Avoid a reproducible HotSpot C2 crash in Room/Robolectric unit tests on Windows JDK 17.
+            jvmArgs("-XX:TieredStopAtLevel=1")
+        }
     }
 }
 

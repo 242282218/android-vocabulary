@@ -13,6 +13,8 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Get-AndroidVocabularyRepoRoot
 $packageName = 'com.zzz.androidvocab'
 
+Use-AndroidVocabularyJavaHome
+
 function Get-DefaultApk {
     $expectedApkName = Get-AndroidVocabularyReleaseApkName
     $searchDirs = @(
