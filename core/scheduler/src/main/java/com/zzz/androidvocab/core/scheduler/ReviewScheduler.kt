@@ -44,8 +44,8 @@ interface ReviewScheduler {
     fun retrievability(
         card: ReviewCard,
         now: Instant,
-        targetRetention: Double = FSRS_DEFAULT_RETENTION,
-    ): Double? = card.retrievability
+        targetRetention: Double,
+    ): Double?
 }
 
 const val FSRS_DEFAULT_RETENTION = 0.9

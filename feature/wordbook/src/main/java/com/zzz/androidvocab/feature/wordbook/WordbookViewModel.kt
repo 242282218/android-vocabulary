@@ -2,6 +2,9 @@ package com.zzz.androidvocab.feature.wordbook
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.zzz.androidvocab.core.common.AppError
+import com.zzz.androidvocab.core.common.AppException
+import com.zzz.androidvocab.core.common.userMessage
 import com.zzz.androidvocab.core.domain.GetBookProgressUseCase
 import com.zzz.androidvocab.core.domain.ObserveSettingsUseCase
 import com.zzz.androidvocab.core.domain.ObserveWordDetailUseCase
@@ -14,6 +17,7 @@ import com.zzz.androidvocab.core.model.WordDetail
 import com.zzz.androidvocab.core.model.WordEntry
 import com.zzz.androidvocab.core.model.WordStatusFilter
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,7 +38,10 @@ data class WordbookUiState(
     val query: String = "",
     val statusFilter: WordStatusFilter = WordStatusFilter.All,
     val words: List<WordEntry> = emptyList(),
+    val displayedWords: List<WordEntry> = emptyList(),
+    val hasMoreWords: Boolean = false,
     val selectedWordDetail: WordDetail? = null,
+    val bookSelectionErrorMessage: String? = null,
 )
 
 @HiltViewModel
@@ -50,6 +57,8 @@ class WordbookViewModel
         private val query = MutableStateFlow("")
         private val statusFilter = MutableStateFlow(WordStatusFilter.All)
         private val selectedWordId = MutableStateFlow<String?>(null)
+        private val bookSelectionErrorMessage = MutableStateFlow<String?>(null)
+        private val displayedCount = MutableStateFlow(INITIAL_DISPLAY_COUNT)
 
         @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
         val uiState =
@@ -57,9 +66,13 @@ class WordbookViewModel
                 val settingsFlow = observeSettingsUseCase()
                 val filterFlow = combine(query, statusFilter) { rawQuery, filter -> rawQuery to filter }
                 val wordsFlow =
-                    combine(settingsFlow, query.debounce(300), statusFilter) { settings, _, filter ->
+                    combine(
+                        settingsFlow,
+                        query.debounce(QUERY_DEBOUNCE_MS),
+                        statusFilter,
+                    ) { settings, debouncedQuery, filter ->
                         SearchRequest(
-                            query = query.value,
+                            query = debouncedQuery,
                             bookCodes = settings.selectedBooks,
                             statusFilter = filter,
                         )
@@ -71,33 +84,53 @@ class WordbookViewModel
                     selectedWordId.flatMapLatest { wordId ->
                         wordId?.let(observeWordDetailUseCase::invoke) ?: flowOf(null)
                     }
+                val contentFlow =
+                    combine(
+                        filterFlow,
+                        wordsFlow,
+                        detailFlow,
+                        bookSelectionErrorMessage,
+                        displayedCount,
+                    ) { filterState, words, detail, bookSelectionError, count ->
+                        capDisplayedCount(words.size)
+                        val displayed = words.take(count)
+                        WordbookContentState(
+                            filterState = filterState,
+                            words = words,
+                            displayedWords = displayed,
+                            hasMoreWords = words.size > count,
+                            detail = detail,
+                            bookSelectionErrorMessage = bookSelectionError,
+                        )
+                    }
                 combine(
                     settingsFlow,
                     getBookProgressUseCase(),
-                    filterFlow,
-                    wordsFlow,
-                    detailFlow,
-                ) { settings, progress, filterState, words, detail ->
+                    contentFlow,
+                ) { settings, progress, content ->
                     WordbookUiState(
                         isLoading = false,
                         settings = settings,
                         progress = progress,
-                        query = filterState.first,
-                        statusFilter = filterState.second,
-                        words = words,
-                        selectedWordDetail = detail,
+                        query = content.filterState.first,
+                        statusFilter = content.filterState.second,
+                        words = content.words,
+                        displayedWords = content.displayedWords,
+                        hasMoreWords = content.hasMoreWords,
+                        selectedWordDetail = content.detail,
+                        bookSelectionErrorMessage = content.bookSelectionErrorMessage,
                     )
                 }
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WordbookUiState())
 
         fun updateQuery(value: String) {
             query.value = value
-            selectedWordId.value = null
+            resetSelectionAndPagination()
         }
 
         fun updateStatusFilter(value: WordStatusFilter) {
             statusFilter.value = value
-            selectedWordId.value = null
+            resetSelectionAndPagination()
         }
 
         fun selectWord(wordId: String) {
@@ -108,12 +141,47 @@ class WordbookViewModel
             selectedWordId.value = null
         }
 
-        fun toggleBook(bookCode: BookCode) {
-            viewModelScope.launch {
-                selectedWordId.value = null
-                updateSettingsUseCase.toggleBook(bookCode)
+        fun loadMore() {
+            displayedCount.value += PAGE_SIZE
+        }
+
+        /**
+         * Called internally after each combine emission to cap pagination
+         * so [displayedCount] never exceeds the actual word list size.
+         */
+        private fun capDisplayedCount(wordsSize: Int) {
+            if (displayedCount.value > wordsSize) {
+                displayedCount.value = wordsSize
             }
         }
+
+        private fun resetSelectionAndPagination() {
+            selectedWordId.value = null
+            displayedCount.value = INITIAL_DISPLAY_COUNT
+        }
+
+        fun toggleBook(bookCode: BookCode) {
+            viewModelScope.launch {
+                bookSelectionErrorMessage.value = null
+                selectedWordId.value = null
+                try {
+                    updateSettingsUseCase.toggleBook(bookCode)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    bookSelectionErrorMessage.value = e.toBookSelectionMessage()
+                }
+            }
+        }
+
+        private data class WordbookContentState(
+            val filterState: Pair<String, WordStatusFilter>,
+            val words: List<WordEntry>,
+            val displayedWords: List<WordEntry>,
+            val hasMoreWords: Boolean,
+            val detail: WordDetail?,
+            val bookSelectionErrorMessage: String?,
+        )
 
         private data class SearchRequest(
             val query: String,
@@ -121,3 +189,21 @@ class WordbookViewModel
             val statusFilter: WordStatusFilter,
         )
     }
+
+private const val INITIAL_DISPLAY_COUNT = 50
+private const val PAGE_SIZE = 50
+private const val QUERY_DEBOUNCE_MS = 300L
+
+private fun Throwable.toBookSelectionMessage(): String {
+    val reason =
+        when (this) {
+            is AppException ->
+                when (error) {
+                    is AppError.DatabaseWriteFailed ->
+                        "词书选择保存失败：${(error as AppError.DatabaseWriteFailed).reason}"
+                    else -> error.userMessage
+                }
+            else -> message ?: "词书选择保存失败"
+        }
+    return "$reason。当前选择已保留，可以再次点选词书重试。"
+}

@@ -1,4 +1,4 @@
-package com.zzz.androidvocab.core.database
+﻿package com.zzz.androidvocab.core.database
 
 import android.database.sqlite.SQLiteConstraintException
 import androidx.room.withTransaction
@@ -18,6 +18,7 @@ import com.zzz.androidvocab.core.model.ReviewQueueItem
 import com.zzz.androidvocab.core.model.ReviewResult
 import com.zzz.androidvocab.core.model.SubmitFeedbackCommand
 import com.zzz.androidvocab.core.model.TodayQueue
+import com.zzz.androidvocab.core.model.effectiveSelectedBookCodeNames
 import com.zzz.androidvocab.core.scheduler.ReviewScheduler
 import com.zzz.androidvocab.core.scheduler.ScheduleInput
 import kotlinx.coroutines.CancellationException
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
 @Suppress("TooManyFunctions")
@@ -40,14 +42,17 @@ class OfflineReviewRepository
         private val statsDao: StatsDao,
         private val scheduler: ReviewScheduler,
         private val clockProvider: ClockProvider,
+        private val integrityService: ReviewDataIntegrityService,
     ) : ReviewRepository {
+        private val repairOnce = AtomicBoolean(false)
+
         @OptIn(ExperimentalCoroutinesApi::class)
         override fun observeTodayQueue(
             now: Instant,
             selectedBooks: Set<BookCode>,
             dailyNewLimit: Int,
         ): Flow<TodayQueue> {
-            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
+            val bookCodes = selectedBooks.effectiveSelectedBookCodeNames()
             val dueFlow =
                 reviewDao.observeDueQueue(
                     now = now,
@@ -69,7 +74,11 @@ class OfflineReviewRepository
                     dueItems = dueRows.map { queueRowToItem(it, now) },
                     newItems = newRows.map { queueRowToItem(it, now) },
                 )
-            }.onStart { repairMissingCardsFromLogs(now) }
+            }.onStart {
+                if (repairOnce.compareAndSet(false, true)) {
+                    repairMissingCardsFromLogs(now)
+                }
+            }
         }
 
         override suspend fun submitFeedback(command: SubmitFeedbackCommand): ReviewResult =
@@ -171,32 +180,9 @@ class OfflineReviewRepository
 
         override suspend fun getQueueItem(cardId: String): ReviewQueueItem = readQueueItem(cardId, clockProvider.now())
 
-        override suspend fun inspectReviewDataIntegrity(): ReviewDataIntegrityReport =
-            database.withTransaction {
-                inspectReviewDataIntegrityInTransaction(clockProvider.now())
-            }
+        override suspend fun inspectReviewDataIntegrity(): ReviewDataIntegrityReport = integrityService.inspect()
 
-        override suspend fun repairReviewDataCache(): ReviewDataRepairResult =
-            database.withTransaction {
-                val now = clockProvider.now()
-                val before = inspectReviewDataIntegrityInTransaction(now)
-                val logicalLogGroups = loadLogicalLogGroups()
-                val repaired =
-                    repairReviewDataCacheInTransaction(
-                        logicalLogGroups = logicalLogGroups,
-                        dailyStatsIssueCount =
-                            before.missingDailyStatsCount + before.inconsistentDailyStatsCount,
-                        now = now,
-                        snapshotOnly = true,
-                    )
-                val after = inspectReviewDataIntegrityInTransaction(now)
-                ReviewDataRepairResult(
-                    before = before,
-                    after = after,
-                    repairedCount = repaired.repairedCount,
-                    timelineConflictCacheRebuiltCount = repaired.timelineConflictCacheRebuiltCount,
-                )
-            }
+        override suspend fun repairReviewDataCache(): ReviewDataRepairResult = integrityService.repair()
 
         private suspend fun readQueueItem(
             cardId: String,
@@ -278,14 +264,16 @@ class OfflineReviewRepository
         }
 
         private suspend fun repairMissingCardsFromLogs(now: Instant): Int {
+            val missingCardIds = reviewDao.getCardIdsMissingCacheFromLogs()
+            if (missingCardIds.isEmpty()) return 0
             val repairedCards =
-                loadLogicalLogGroups().mapNotNull { (key, logs) ->
-                    val current = reviewDao.getCardByWordAndBook(key.wordId, key.bookCode.name)?.toModel()
-                    if (current != null) {
-                        return@mapNotNull null
-                    }
+                missingCardIds.mapNotNull { cardId ->
+                    val replaySource = resolveReplaySource(cardId)
+                    if (replaySource.logs.isEmpty()) return@mapNotNull null
+                    val logicalKey = parseLogicalCardKey(cardId)
+                    val targetId = logicalKey?.let { canonicalCardId(it) } ?: cardId
                     runCatching {
-                        replayLogsToCard(canonicalCardId(key), logs, now).toEntity()
+                        replayLogsToCard(targetId, replaySource.logs, now).toEntity()
                     }.getOrElse { error ->
                         when (error) {
                             is CancellationException -> throw error
@@ -298,111 +286,6 @@ class OfflineReviewRepository
                 reviewDao.upsertCards(repairedCards)
             }
             return repairedCards.size
-        }
-
-        private suspend fun inspectReviewDataIntegrityInTransaction(now: Instant): ReviewDataIntegrityReport {
-            var missingCacheCount = 0
-            var inconsistentCacheCount = 0
-            var legacyLogCardCount = 0
-            var malformedLogCardCount = 0
-            var timelineConflictCardCount = 0
-            var cardRepairableIssueCount = 0
-            val logicalLogGroups = loadLogicalLogGroups()
-            logicalLogGroups.forEach { (key, logs) ->
-                val current = reviewDao.getCardByWordAndBook(key.wordId, key.bookCode.name)?.toModel()
-                val targetCardId = canonicalCardId(key)
-                val hasLegacyLogs = logs.any { !it.hasCardSnapshot() }
-                val hasMalformedLogCardId = logs.any { it.cardId != canonicalCardId(key) }
-                val hasMalformedCurrentCardId = current?.id?.let { it != targetCardId } ?: false
-                if (hasLegacyLogs) {
-                    legacyLogCardCount += 1
-                } else if (hasSnapshotTimelineConflict(targetCardId, logs, now)) {
-                    timelineConflictCardCount += 1
-                }
-                if (hasMalformedLogCardId) {
-                    malformedLogCardCount += 1
-                }
-                if (current == null) {
-                    missingCacheCount += 1
-                    if (!hasLegacyLogs) {
-                        cardRepairableIssueCount += 1
-                    }
-                } else {
-                    val hasReplayedStateMismatch =
-                        if (hasLegacyLogs) {
-                            false
-                        } else {
-                            current.differsFrom(replayLogsToCard(targetCardId, logs, now))
-                        }
-                    if (hasMalformedCurrentCardId || hasReplayedStateMismatch) {
-                        inconsistentCacheCount += 1
-                        cardRepairableIssueCount += 1
-                    }
-                }
-            }
-            val dailyStatsFromLogs = statsDao.dailyStatsFromLogsRows().associateBy { it.localDay }
-            val cachedDailyStats = statsDao.dailyStats().associateBy { it.localDay }
-            val dailyStatsDays = dailyStatsFromLogs.size
-            val missingDailyStatsCount = dailyStatsFromLogs.keys.count { it !in cachedDailyStats }
-            val inconsistentDailyStatsCount =
-                dailyStatsFromLogs.entries.count { (localDay, derived) ->
-                    val cached = cachedDailyStats[localDay] ?: return@count false
-                    cached.differsFrom(derived)
-                } + cachedDailyStats.keys.count { it !in dailyStatsFromLogs }
-            return ReviewDataIntegrityReport(
-                cardsWithLogs = logicalLogGroups.size,
-                missingCacheCount = missingCacheCount,
-                inconsistentCacheCount = inconsistentCacheCount,
-                legacyLogCardCount = legacyLogCardCount,
-                orphanLogCount = reviewDao.countOrphanLogs(),
-                malformedLogCardCount = malformedLogCardCount,
-                dailyStatsDays = dailyStatsDays,
-                missingDailyStatsCount = missingDailyStatsCount,
-                inconsistentDailyStatsCount = inconsistentDailyStatsCount,
-                timelineConflictCardCount = timelineConflictCardCount,
-                repairableIssueCount =
-                    cardRepairableIssueCount + missingDailyStatsCount + inconsistentDailyStatsCount,
-            )
-        }
-
-        private suspend fun repairReviewDataCacheInTransaction(
-            logicalLogGroups: Map<LogicalCardKey, List<ReviewLog>>,
-            dailyStatsIssueCount: Int,
-            now: Instant,
-            snapshotOnly: Boolean,
-        ): RepairCacheResult {
-            var repaired = 0
-            var timelineConflictCacheRebuiltCount = 0
-            logicalLogGroups.forEach { (key, logs) ->
-                var current = reviewDao.getCardByWordAndBook(key.wordId, key.bookCode.name)?.toModel()
-                val targetCardId = canonicalCardId(key)
-                if (current != null && current.id != targetCardId) {
-                    reviewDao.upsertCard(current.copy(id = targetCardId).toEntity())
-                    reviewDao.deleteCard(current.id)
-                    current = current.copy(id = targetCardId)
-                    repaired += 1
-                }
-                if (snapshotOnly && logs.any { !it.hasCardSnapshot() }) {
-                    return@forEach
-                }
-                val hasTimelineConflict = hasSnapshotTimelineConflict(targetCardId, logs, now)
-                val replayed = replayLogsToCard(targetCardId, logs, now)
-                if (current == null || current.differsFrom(replayed)) {
-                    reviewDao.upsertCard(replayed.toEntity())
-                    repaired += 1
-                    if (hasTimelineConflict) {
-                        timelineConflictCacheRebuiltCount += 1
-                    }
-                }
-            }
-            if (dailyStatsIssueCount > 0) {
-                statsDao.rebuildDailyStatsCache(now)
-                repaired += dailyStatsIssueCount
-            }
-            return RepairCacheResult(
-                repairedCount = repaired,
-                timelineConflictCacheRebuiltCount = timelineConflictCacheRebuiltCount,
-            )
         }
 
         private suspend fun refreshDailyStats(
@@ -439,24 +322,6 @@ class OfflineReviewRepository
             }
         }
 
-        private suspend fun hasSnapshotTimelineConflict(
-            cardId: String,
-            logs: List<ReviewLog>,
-            now: Instant,
-        ): Boolean {
-            if (logs.isEmpty() || logs.any { !it.hasCardSnapshot() }) {
-                return false
-            }
-            var card = baseCardForReplay(cardId, logs, now)
-            logs.forEach { log ->
-                if (!log.matchesCardBeforeSnapshot(card, clockProvider.zoneId())) {
-                    return true
-                }
-                card = card.applySnapshot(log)
-            }
-            return false
-        }
-
         private suspend fun baseCardForReplay(
             cardId: String,
             logs: List<ReviewLog>,
@@ -491,12 +356,6 @@ class OfflineReviewRepository
             )
         }
 
-        private suspend fun loadLogicalLogGroups(): Map<LogicalCardKey, List<ReviewLog>> =
-            reviewDao
-                .getValidLogs()
-                .map { it.toModel() }
-                .groupBy { log -> LogicalCardKey(wordId = log.wordId, bookCode = log.bookCode) }
-
         private suspend fun resolveReplaySource(cardId: String): ReplaySource {
             val directLogs = reviewDao.getLogs(cardId).map { it.toModel() }
             val logicalKey = parseLogicalCardKey(cardId) ?: directLogs.firstOrNull()?.toLogicalCardKey()
@@ -515,9 +374,8 @@ class OfflineReviewRepository
 
         private suspend fun loadLogicalLogs(key: LogicalCardKey): List<ReviewLog> =
             reviewDao
-                .getValidLogs()
+                .getValidLogsByWordAndBook(key.wordId, key.bookCode.name)
                 .map { it.toModel() }
-                .filter { log -> log.wordId == key.wordId && log.bookCode == key.bookCode }
 
         private suspend fun queueRowToItem(
             row: ReviewQueueRow,
@@ -528,17 +386,26 @@ class OfflineReviewRepository
             if (cachedCardId == null || cachedCardId == canonicalCardId) {
                 return row.toQueueItem(now)
             }
-            val replaySource = resolveReplaySource(cachedCardId)
-            val repairedCard =
-                if (replaySource.logs.isNotEmpty()) {
-                    replayLogsToCard(canonicalCardId, replaySource.logs, now)
-                } else {
-                    row.toQueueItem(now).card.copy(id = canonicalCardId)
-                }
-            reviewDao.upsertCard(repairedCard.toEntity())
-            reviewDao.deleteCard(cachedCardId)
+            val repairedCard = repairMalformedCardId(cachedCardId, canonicalCardId, row, now)
             return reviewDao.getQueueItem(repairedCard.id)?.toQueueItem(now)
                 ?: row.toQueueItem(now).copy(card = repairedCard, isNew = false)
+        }
+
+        private suspend fun repairMalformedCardId(
+            malformedCardId: String,
+            canonicalCardId: String,
+            row: ReviewQueueRow,
+            now: Instant,
+        ): com.zzz.androidvocab.core.model.ReviewCard {
+            val replaySource = resolveReplaySource(malformedCardId)
+            return if (replaySource.logs.isNotEmpty()) {
+                replayLogsToCard(canonicalCardId, replaySource.logs, now)
+            } else {
+                row.toQueueItem(now).card.copy(id = canonicalCardId)
+            }.also { repairedCard ->
+                reviewDao.upsertCard(repairedCard.toEntity())
+                reviewDao.deleteCard(malformedCardId)
+            }
         }
 
         private fun scheduleOrThrow(input: ScheduleInput) =
@@ -574,11 +441,6 @@ private data class ReplaySource(
     val logs: List<ReviewLog>,
 )
 
-private data class RepairCacheResult(
-    val repairedCount: Int,
-    val timelineConflictCacheRebuiltCount: Int,
-)
-
 private fun canonicalCardId(key: LogicalCardKey): String = cardId(key.wordId, key.bookCode.name)
 
 private fun parseLogicalCardKey(cardId: String): LogicalCardKey? {
@@ -592,7 +454,7 @@ private fun parseLogicalCardKey(cardId: String): LogicalCardKey? {
 
 private fun parseCardId(cardId: String): ParsedCardId? {
     val parts = cardId.split("|")
-    if (parts.size != 3 || parts[0] != "card") {
+    if (parts.size != 3 || parts[0] != CARD_ID_PREFIX) {
         return null
     }
     return ParsedCardId(
@@ -600,6 +462,8 @@ private fun parseCardId(cardId: String): ParsedCardId? {
         wordId = parts[2],
     )
 }
+
+private const val CARD_ID_PREFIX = "card"
 
 private fun ReviewLog.toLogicalCardKey(): LogicalCardKey =
     LogicalCardKey(
@@ -652,15 +516,6 @@ private fun ReviewLog.hasCardSnapshot(): Boolean =
         stabilityAfter != null &&
         retrievabilityAfter != null
 
-private fun ReviewLog.matchesCardBeforeSnapshot(
-    card: ReviewCard,
-    zoneId: java.time.ZoneId,
-): Boolean =
-    scheduledDaysBefore == card.scheduledDays &&
-        difficultyBefore == card.difficulty &&
-        stabilityBefore == card.stability &&
-        elapsedDays == daysBetween(card.lastReviewAt, reviewedAt, zoneId)
-
 private fun com.zzz.androidvocab.core.model.ReviewCard.applySnapshot(log: ReviewLog) =
     copy(
         state = requireNotNull(log.stateAfter),
@@ -675,28 +530,3 @@ private fun com.zzz.androidvocab.core.model.ReviewCard.applySnapshot(log: Review
         firstReviewedAt = firstReviewedAt ?: log.reviewedAt,
         updatedAt = log.reviewedAt,
     )
-
-private fun ReviewCard.differsFrom(other: ReviewCard): Boolean =
-    state != other.state ||
-        difficulty != other.difficulty ||
-        stability != other.stability ||
-        retrievability != other.retrievability ||
-        scheduledDays != other.scheduledDays ||
-        dueAt != other.dueAt ||
-        lastReviewAt != other.lastReviewAt ||
-        reviewCount != other.reviewCount ||
-        lapseCount != other.lapseCount ||
-        firstReviewedAt != other.firstReviewedAt ||
-        updatedAt != other.updatedAt
-
-private fun DailyStatsEntity.differsFrom(other: ReviewDailyStatsView): Boolean =
-    newCount != other.newCount ||
-        reviewCount != other.reviewCount ||
-        againCount != other.againCount ||
-        hardCount != other.hardCount ||
-        goodCount != other.goodCount ||
-        easyCount != other.easyCount ||
-        completedCount != other.completedCount ||
-        recallAccuracy != other.recallAccuracy ||
-        passRate != other.passRate ||
-        estimatedMinutes != other.estimatedMinutes

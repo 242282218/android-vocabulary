@@ -6,13 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-
-internal const val POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK = 33
-
-internal fun shouldRequestPostNotificationsPermission(
-    sdkInt: Int,
-    isGranted: Boolean,
-): Boolean = sdkInt >= POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK && !isGranted
+import com.zzz.androidvocab.core.common.POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK
 
 internal enum class NotificationAccess {
     Granted,
@@ -24,6 +18,11 @@ internal enum class ReminderSyncAction {
     Schedule,
     Cancel,
 }
+
+internal fun shouldRequestPostNotificationsPermission(
+    sdkInt: Int,
+    isGranted: Boolean,
+): Boolean = sdkInt >= POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK && !isGranted
 
 internal fun resolveNotificationAccess(
     sdkInt: Int,

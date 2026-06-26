@@ -3,7 +3,6 @@ package com.zzz.androidvocab.core.designsystem
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -26,6 +25,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -38,19 +40,30 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.zzz.androidvocab.core.model.DailyReviewLoad
+import kotlin.math.roundToInt
 
 val ScreenHorizontalPadding = 20.dp
-val ScreenVerticalPadding = 18.dp
+val ScreenVerticalPadding = 16.dp
 
-val VocabCardShape = RoundedCornerShape(14.dp)
-val VocabControlShape = RoundedCornerShape(12.dp)
-val VocabHeroShape = RoundedCornerShape(18.dp)
+val VocabCardShape = RoundedCornerShape(10.dp)
+val VocabControlShape = RoundedCornerShape(10.dp)
+val VocabHeroShape = RoundedCornerShape(12.dp)
+val VocabPillShape = RoundedCornerShape(999.dp)
+val VocabTinyBarShape = RoundedCornerShape(6.dp)
+val VocabTinyLegendDotShape = RoundedCornerShape(4.dp)
 
 @Composable
 fun VocabScreen(
@@ -63,7 +76,7 @@ fun VocabScreen(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = ScreenHorizontalPadding, vertical = ScreenVerticalPadding),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
         content = content,
     )
 }
@@ -75,28 +88,118 @@ fun VocabCard(
     containerColor: Color = MaterialTheme.colorScheme.surface,
     contentColor: Color = MaterialTheme.colorScheme.onSurface,
     borderColor: Color = MaterialTheme.colorScheme.outline,
-    contentPadding: Dp = 20.dp,
+    contentPadding: Dp = 18.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = VocabCardShape,
-        border = BorderStroke(0.65.dp, borderColor),
+        border = BorderStroke(0.6.dp, borderColor.copy(alpha = 0.6f)),
         colors =
             CardDefaults.cardColors(
                 containerColor = containerColor,
                 contentColor = contentColor,
             ),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (elevated) 1.dp else 0.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (elevated) 0.5.dp else 0.dp),
     ) {
         Column(
             modifier =
                 Modifier
                     .fillMaxWidth()
                     .padding(contentPadding),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
             content = content,
         )
+    }
+}
+
+@Composable
+fun VocabLoadingCard(
+    title: String,
+    body: String,
+    modifier: Modifier = Modifier,
+    elevated: Boolean = true,
+) {
+    VocabCard(
+        modifier =
+            modifier.semantics {
+                liveRegion = LiveRegionMode.Polite
+            },
+        elevated = elevated,
+    ) {
+        VocabLoadingState(title = title, body = body)
+    }
+}
+
+@Composable
+fun VocabErrorCard(
+    modifier: Modifier = Modifier,
+    elevated: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    VocabCard(
+        modifier =
+            modifier.semantics {
+                liveRegion = LiveRegionMode.Assertive
+            },
+        elevated = elevated,
+        containerColor = VocabThemeExtras.colors.errorCardBackground,
+        borderColor = vocabErrorBorderColor(),
+        content = content,
+    )
+}
+
+@Composable
+fun vocabErrorBorderColor(): Color = MaterialTheme.colorScheme.error.copy(alpha = VOCAB_ERROR_BORDER_ALPHA)
+
+private const val VOCAB_ERROR_BORDER_ALPHA = 0.24f
+private const val VOCAB_DISABLED_CONTENT_ALPHA = 0.38f
+
+@Composable
+private fun disabledContentColor(): Color =
+    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = VOCAB_DISABLED_CONTENT_ALPHA)
+
+@Composable
+fun VocabInlineError(
+    text: String,
+    modifier: Modifier = Modifier,
+    supportingText: String? = null,
+) {
+    Column(
+        modifier =
+            modifier.semantics {
+                liveRegion = LiveRegionMode.Assertive
+            },
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = text,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        supportingText?.let {
+            Text(
+                text = it,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+fun VocabLoadingState(
+    title: String,
+    body: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        VocabEmptyState(title = title, body = body)
+        CircularProgressIndicator()
     }
 }
 
@@ -105,14 +208,14 @@ fun WarmHeroCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val isDark = isSystemInDarkTheme()
+    val colors = VocabThemeExtras.colors
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = VocabHeroShape,
-        border = BorderStroke(1.dp, if (isDark) VocabColors.HeroBorderDark else VocabColors.HeroBorder),
+        border = BorderStroke(0.8.dp, colors.heroBorder.copy(alpha = 0.7f)),
         colors =
             CardDefaults.cardColors(
-                containerColor = if (isDark) VocabColors.HeroBackgroundDark else VocabColors.HeroBackground,
+                containerColor = colors.heroBackground,
                 contentColor = MaterialTheme.colorScheme.onSurface,
             ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
@@ -121,8 +224,8 @@ fun WarmHeroCard(
             modifier =
                 Modifier
                     .fillMaxWidth()
-                    .padding(22.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                    .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
             content = content,
         )
     }
@@ -269,7 +372,7 @@ fun VocabPill(
         modifier = modifier.heightIn(min = 28.dp),
         color = color,
         contentColor = contentColor,
-        shape = RoundedCornerShape(999.dp),
+        shape = VocabPillShape,
     ) {
         Text(
             text = text,
@@ -280,6 +383,44 @@ fun VocabPill(
             overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+@Composable
+fun VocabFilterChip(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        modifier =
+            modifier
+                .heightIn(min = 48.dp)
+                .semantics {
+                    stateDescription = if (selected) "已选择" else "未选择"
+                },
+        enabled = enabled,
+        label = {
+            Text(
+                text = text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        shape = VocabControlShape,
+        colors =
+            FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                containerColor = MaterialTheme.colorScheme.surface,
+                labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                disabledLabelColor = disabledContentColor(),
+            ),
+    )
 }
 
 @Composable
@@ -299,13 +440,14 @@ fun PrimaryAction(
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
                 disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                disabledContentColor = disabledContentColor(),
             ),
     ) {
         Text(
             text = text,
             fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
     }
@@ -327,13 +469,14 @@ fun SecondaryAction(
         colors =
             ButtonDefaults.outlinedButtonColors(
                 contentColor = MaterialTheme.colorScheme.onSurface,
-                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                disabledContentColor = disabledContentColor(),
             ),
     ) {
         Text(
             text = text,
             fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
     }
@@ -344,18 +487,29 @@ fun VocabProgressBar(
     progress: Float,
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.primary,
+    semanticDescription: String? = null,
 ) {
+    val coercedProgress = progress.coerceIn(0f, 1f)
+    val progressDescription = semanticDescription ?: "进度 ${vocabWholePercent(coercedProgress)}%"
     LinearProgressIndicator(
-        progress = { progress.coerceIn(0f, 1f) },
+        progress = { coercedProgress },
         modifier =
             modifier
                 .fillMaxWidth()
                 .height(10.dp)
-                .clip(RoundedCornerShape(999.dp)),
+                .clip(VocabPillShape)
+                .semantics {
+                    progressBarRangeInfo = ProgressBarRangeInfo(coercedProgress, 0f..1f)
+                    contentDescription = progressDescription
+                },
         trackColor = MaterialTheme.colorScheme.surfaceVariant,
         color = color,
     )
 }
+
+fun vocabWholePercent(value: Float): Int = (value.coerceIn(0f, 1f) * 100).roundToInt()
+
+fun vocabWholePercent(value: Double): Int = (value.coerceIn(0.0, 1.0) * 100).roundToInt()
 
 @Composable
 fun MiniReviewLoadChart(
@@ -364,15 +518,27 @@ fun MiniReviewLoadChart(
     maxBars: Int = 14,
     height: Dp = 48.dp,
 ) {
-    val visibleLoad = load.take(maxBars)
-    val max = visibleLoad.maxOfOrNull { it.dueCount }?.coerceAtLeast(1) ?: 1
+    val visibleLoad = load.take(maxBars).map { it.copy(dueCount = it.dueCount.coerceAtLeast(0)) }
+    val maxDueCount = visibleLoad.maxOfOrNull { it.dueCount } ?: 0
+    val scaleMax = maxDueCount.coerceAtLeast(1)
+    val totalDueCount = visibleLoad.sumOf { it.dueCount }
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .semantics {
+                    contentDescription =
+                        if (visibleLoad.isEmpty()) {
+                            "复习负载图，暂无到期词。"
+                        } else {
+                            "复习负载图，显示 ${visibleLoad.size} 天，总到期 $totalDueCount 个，最高单日 $maxDueCount 个。"
+                        }
+                },
         horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.Bottom,
     ) {
         visibleLoad.forEach { item ->
-            val fraction = item.dueCount.toFloat() / max.toFloat()
+            val fraction = item.dueCount.toFloat() / scaleMax.toFloat()
             Box(
                 modifier =
                     Modifier
@@ -385,7 +551,7 @@ fun MiniReviewLoadChart(
                         Modifier
                             .fillMaxWidth()
                             .height(8.dp + (height - 8.dp) * fraction)
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(VocabTinyBarShape)
                             .background(
                                 if (item.dueCount == 0) {
                                     MaterialTheme.colorScheme.surfaceVariant
@@ -414,7 +580,7 @@ fun TinyLegend(
             modifier =
                 Modifier
                     .size(8.dp)
-                    .clip(RoundedCornerShape(4.dp))
+                    .clip(VocabTinyLegendDotShape)
                     .background(color),
         )
         Text(
@@ -433,7 +599,22 @@ fun VocabSparkline(
 ) {
     val gridColor = MaterialTheme.colorScheme.outline
     val normalizedValues = values.ifEmpty { listOf(0) }
-    Canvas(modifier = modifier.fillMaxWidth().height(118.dp)) {
+    val total = values.sum()
+    val max = values.maxOrNull() ?: 0
+    Canvas(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .height(118.dp)
+                .semantics {
+                    contentDescription =
+                        if (values.isEmpty()) {
+                            "趋势图，暂无复习记录。"
+                        } else {
+                            "趋势图，显示 ${values.size} 天，总复习 $total 次，最高单日 $max 次。"
+                        }
+                },
+    ) {
         val max = normalizedValues.maxOrNull()?.coerceAtLeast(1) ?: 1
         val min = normalizedValues.minOrNull()?.coerceAtLeast(0) ?: 0
         val range = (max - min).coerceAtLeast(1)

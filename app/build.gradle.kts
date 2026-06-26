@@ -138,6 +138,7 @@ fun registerRootApkCopyTask(variantName: String) {
 }
 
 registerRootApkCopyTask("debug")
+registerRootApkCopyTask("release")
 
 dependencies {
     implementation(project(":core:model"))

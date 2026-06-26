@@ -18,6 +18,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.runtime.State
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -71,7 +72,7 @@ fun ReviewScreen(
     uiState: ReviewUiState,
     onShowBack: () -> Unit,
     onSpeak: (String) -> Unit,
-    isSpeechReady: Boolean = true,
+    isSpeechReady: State<Boolean> = mutableStateOf(true),
     onSubmit: (ReviewRating) -> Unit,
 ) {
     VocabScreen {
@@ -105,7 +106,7 @@ fun ReviewScreen(
             isBackVisible = uiState.isBackVisible,
             onShowBack = onShowBack,
             onSpeak = onSpeak,
-            isSpeechReady = isSpeechReady,
+            isSpeechReady = isSpeechReady.value,
         )
         if (uiState.isBackVisible) {
             FeedbackButtons(
@@ -340,7 +341,7 @@ private fun AnswerBlock(item: ReviewQueueItem) {
 }
 
 private data class WordSpeaker(
-    val isReady: Boolean,
+    val isReady: androidx.compose.runtime.State<Boolean>,
     val speak: (String) -> Unit,
 )
 
@@ -370,7 +371,7 @@ private fun rememberWordSpeaker(): WordSpeaker {
         }
     }
     return WordSpeaker(
-        isReady = isReady.value,
+        isReady = isReady,
         speak = { word ->
             if (isReady.value) {
                 ttsRef.value?.speak(word, TextToSpeech.QUEUE_FLUSH, null, "review-word-$word")

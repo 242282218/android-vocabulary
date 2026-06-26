@@ -5,6 +5,10 @@ sealed interface AppError {
         val reason: String,
     ) : AppError
 
+    data class DatabaseReadFailed(
+        val reason: String,
+    ) : AppError
+
     data class DatabaseWriteFailed(
         val reason: String,
     ) : AppError
@@ -22,6 +26,7 @@ val AppError.userMessage: String
     get() =
         when (this) {
             is AppError.VocabularyImportFailed -> "词库导入失败：$reason"
+            is AppError.DatabaseReadFailed -> "读取数据超时：$reason"
             is AppError.DatabaseWriteFailed -> "学习数据保存失败：$reason"
             is AppError.SchedulerFailed -> "复习计划计算失败：$reason"
             is AppError.ExportFailed -> "数据导出失败：$reason"

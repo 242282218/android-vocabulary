@@ -9,6 +9,7 @@ import com.zzz.androidvocab.core.model.ReviewCard
 import com.zzz.androidvocab.core.model.ReviewState
 import com.zzz.androidvocab.core.model.WordEntry
 import com.zzz.androidvocab.core.model.WordStatusFilter
+import com.zzz.androidvocab.core.model.effectiveSelectedBookCodes
 import java.time.Instant
 
 fun calculateBookProgress(
@@ -16,26 +17,36 @@ fun calculateBookProgress(
     cards: List<ReviewCard>,
     now: Instant,
     retrievability: (ReviewCard) -> Double?,
-): List<BookProgress> =
-    BookCode.entries.filter { it in totals }.map { book ->
-        val bookCards = cards.filter { it.bookCode == book }
-        BookProgress(
-            bookCode = book,
+): List<BookProgress> {
+    val cardsByBook = cards.groupBy { it.bookCode }
+    return BookCode.entries.filter { it in totals }.map { book ->
+        bookProgress(
+            book = book,
             totalCount = totals[book] ?: 0,
-            learnedCount = bookCards.size,
-            masteredCount = bookCards.count { it.isCurrentlyMastered(now, retrievability) },
-            dueCount = bookCards.count { it.dueAt?.let { dueAt -> dueAt <= now } == true },
+            bookCards = cardsByBook[book].orEmpty(),
+            now = now,
+            retrievability = retrievability,
         )
     }
+}
 
 fun calculateBookStats(
     totals: Map<BookCode, Int>,
     cards: List<ReviewCard>,
     now: Instant,
     retrievability: (ReviewCard) -> Double?,
-): List<BookStats> =
-    calculateBookProgress(totals, cards, now, retrievability).map { progress ->
-        val bookCards = cards.filter { it.bookCode == progress.bookCode }
+): List<BookStats> {
+    val cardsByBook = cards.groupBy { it.bookCode }
+    return BookCode.entries.filter { it in totals }.map { book ->
+        val bookCards = cardsByBook[book].orEmpty()
+        val progress =
+            bookProgress(
+                book = book,
+                totalCount = totals[book] ?: 0,
+                bookCards = bookCards,
+                now = now,
+                retrievability = retrievability,
+            )
         BookStats(
             progress = progress,
             unlearnedCount = (progress.totalCount - progress.learnedCount).coerceAtLeast(0),
@@ -46,14 +57,30 @@ fun calculateBookStats(
                         it.state == ReviewState.Relearning
                 },
             familiarCount =
-                bookCards.count {
-                    val due = it.dueAt?.let { dueAt -> dueAt <= now } == true
-                    (it.state == ReviewState.Review || it.state == ReviewState.Mastered) &&
-                        !due &&
-                        !it.isCurrentlyMastered(now, retrievability)
+                bookCards.count { card ->
+                    val isDue = card.dueAt?.let { it <= now } == true
+                    (card.state == ReviewState.Review || card.state == ReviewState.Mastered) &&
+                        !isDue &&
+                        !card.isCurrentlyMastered(now, retrievability)
                 },
         )
     }
+}
+
+private fun bookProgress(
+    book: BookCode,
+    totalCount: Int,
+    bookCards: List<ReviewCard>,
+    now: Instant,
+    retrievability: (ReviewCard) -> Double?,
+): BookProgress =
+    BookProgress(
+        bookCode = book,
+        totalCount = totalCount,
+        learnedCount = bookCards.size,
+        masteredCount = bookCards.count { it.isCurrentlyMastered(now, retrievability) },
+        dueCount = bookCards.count { it.isDue(now) },
+    )
 
 fun filterWordsByStatus(
     words: List<WordEntry>,
@@ -64,7 +91,7 @@ fun filterWordsByStatus(
     retrievability: (ReviewCard) -> Double?,
 ): List<WordEntry> {
     if (statusFilter == WordStatusFilter.All) return words
-    val effectiveBooks = selectedBooks.ifEmpty { BookCode.entries.toSet() }
+    val effectiveBooks = selectedBooks.effectiveSelectedBookCodes().toSet()
     val selectedCardsByWord =
         cards
             .filter { it.bookCode in effectiveBooks }

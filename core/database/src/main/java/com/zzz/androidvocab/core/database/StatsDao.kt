@@ -16,8 +16,9 @@ interface StatsDao {
     @Transaction
     suspend fun rebuildDailyStatsCache(updatedAt: Instant): Int {
         clearDailyStats()
+        val rebuilt = dailyStatsFromLogsRows().size
         insertDailyStatsFromLogs(updatedAt)
-        return dailyStatsCount()
+        return rebuilt
     }
 
     @Query("DELETE FROM daily_stats")
@@ -253,7 +254,11 @@ interface StatsDao {
         WHERE l.reviewedAt >= :from AND l.bookCode IN (:bookCodes)
         GROUP BY l.wordId
         HAVING againCount > 0 OR hardCount > 0
-        ORDER BY (againCount * 3.0 + hardCount * 1.5) DESC
+        ORDER BY
+          (againCount * 3.0 + hardCount * 1.5) DESC,
+          againCount DESC,
+          hardCount DESC,
+          l.wordId ASC
         LIMIT 10
         """,
     )

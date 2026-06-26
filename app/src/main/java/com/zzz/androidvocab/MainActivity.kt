@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.BarChart
@@ -70,14 +69,18 @@ class MainActivity : ComponentActivity() {
                 notificationAccess = readNotificationAccess(context)
             }
             LaunchedEffect(
-                settings.reminderEnabled,
-                settings.reminderHour,
-                settings.reminderMinute,
+                settings?.reminderEnabled,
+                settings?.reminderHour,
+                settings?.reminderMinute,
                 notificationAccess,
             ) {
-                when (reminderSyncAction(settings.reminderEnabled, notificationAccess)) {
+                val loadedSettings = settings ?: return@LaunchedEffect
+                when (reminderSyncAction(loadedSettings.reminderEnabled, notificationAccess)) {
                     ReminderSyncAction.Schedule ->
-                        reminderScheduler.scheduleDailyReminder(settings.reminderHour, settings.reminderMinute)
+                        reminderScheduler.scheduleDailyReminder(
+                            loadedSettings.reminderHour,
+                            loadedSettings.reminderMinute,
+                        )
                     ReminderSyncAction.Cancel -> reminderScheduler.cancelDailyReminder()
                 }
             }
@@ -121,7 +124,7 @@ private fun VocabBottomBar(navController: androidx.navigation.NavHostController)
                 .padding(horizontal = 12.dp, vertical = 8.dp)
                 .windowInsetsPadding(WindowInsets.navigationBars),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-        shape = RoundedCornerShape(18.dp),
+        shape = MaterialTheme.shapes.large,
         border = BorderStroke(0.65.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.72f)),
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
@@ -140,7 +143,7 @@ private fun VocabBottomBar(navController: androidx.navigation.NavHostController)
                             popUpTo(navController.graph.startDestinationId) { saveState = true }
                         }
                     },
-                    icon = { Icon(tab.icon(), contentDescription = tab.label) },
+                    icon = { Icon(tab.icon(), contentDescription = null) },
                     label = { Text(tab.label) },
                     colors =
                         NavigationBarItemDefaults.colors(

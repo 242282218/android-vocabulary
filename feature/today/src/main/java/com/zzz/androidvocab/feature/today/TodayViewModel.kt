@@ -13,11 +13,14 @@ import com.zzz.androidvocab.core.model.TodayOverview
 import com.zzz.androidvocab.core.model.TodayQueue
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import kotlin.math.roundToInt
 
@@ -42,11 +45,12 @@ class TodayViewModel
     ) : ViewModel() {
         private val isImporting = MutableStateFlow(false)
         private val importError = MutableStateFlow<String?>(null)
+        private val importAttempted = AtomicBoolean(false)
 
         val uiState =
             combine(
                 getTodayOverviewUseCase(),
-                getReviewLoadUseCase(14),
+                getReviewLoadUseCase(REVIEW_LOAD_DAYS),
                 isImporting,
                 importError,
                 observeSubmittedCardQueueStateUseCase(),
@@ -74,12 +78,12 @@ class TodayViewModel
         }
 
         fun retryImport() {
+            importAttempted.set(false)
             startImport()
         }
 
         private fun startImport() {
-            if (isImporting.value) return
-            isImporting.value = true
+            if (!importAttempted.compareAndSet(false, true)) return
             importError.value = null
             viewModelScope.launch {
                 importVocabulary()
@@ -88,7 +92,9 @@ class TodayViewModel
 
         private suspend fun importVocabulary() {
             try {
-                importVocabularyUseCase()
+                withContext(Dispatchers.IO) {
+                    importVocabularyUseCase()
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -98,6 +104,8 @@ class TodayViewModel
             }
         }
     }
+
+private const val REVIEW_LOAD_DAYS = 14
 
 private fun TodayOverview.hideSubmittedCard(submittedCardId: String?): TodayOverview {
     if (submittedCardId == null || !queue.containsCard(submittedCardId)) return this
@@ -114,9 +122,9 @@ private fun TodayOverview.hideSubmittedCard(submittedCardId: String?): TodayOver
                 remainingCount = filteredQueue.totalCount,
                 estimatedMinutes =
                     adjustedEstimatedMinutes(
-                        filteredQueue.totalCount,
-                        queue.totalCount,
-                        stats.estimatedMinutes,
+                        filteredCount = filteredQueue.totalCount,
+                        originalCount = queue.totalCount,
+                        originalEstimatedMinutes = stats.estimatedMinutes,
                     ),
             ),
     )

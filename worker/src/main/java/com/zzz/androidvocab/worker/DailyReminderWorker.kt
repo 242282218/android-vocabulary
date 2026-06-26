@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.zzz.androidvocab.core.common.POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 
@@ -77,5 +78,4 @@ internal fun canPostNotifications(
     notificationsEnabled: Boolean,
 ): Boolean = notificationsEnabled && (sdkInt < POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK || permissionGranted)
 
-private const val POST_NOTIFICATIONS_RUNTIME_PERMISSION_SDK = 33
 private const val NOTIFICATION_CHANNEL_ID = "daily_review"
