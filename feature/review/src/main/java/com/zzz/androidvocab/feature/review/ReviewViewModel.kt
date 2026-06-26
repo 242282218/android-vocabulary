@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
@@ -43,46 +45,64 @@ class ReviewViewModel
     ) : ViewModel() {
         private val visibleBackCardId = MutableStateFlow<String?>(null)
         private val isSubmitting = MutableStateFlow(false)
+        private val submitMutex = Mutex()
         private val errorMessage = MutableStateFlow<String?>(null)
 
         private val answerShownAtMs = AtomicLong(0L)
         private val failedSubmitDurationMs = AtomicLong(NO_FAILED_SUBMIT_DURATION_MS)
         private val failedSubmitCardId = AtomicReference<String?>(null)
 
-        val uiState =
-            combine(
-                getTodayQueueUseCase(),
-                visibleBackCardId,
-                observeSubmittedCardQueueStateUseCase(),
-                isSubmitting,
-                errorMessage,
-            ) { queue, backCardId, submittedCardQueueState, submitting, error ->
-                val currentSubmittedCardId = submittedCardQueueState.submittedCardId
-                val submittedCardStillInQueue =
-                    currentSubmittedCardId != null && queue.items.any { it.card.id == currentSubmittedCardId }
-                val visibleItems =
-                    if (currentSubmittedCardId == null) {
-                        queue.items
-                    } else {
-                        queue.items.filterNot { it.card.id == currentSubmittedCardId }
-                    }
-                if (currentSubmittedCardId != null && !submittedCardQueueState.isStillInRawQueue) {
-                    reviewSessionCoordinator.clearSubmittedCard(currentSubmittedCardId)
+        // Split complex combine into smaller, focused flows
+        private val queueFlow = getTodayQueueUseCase()
+        private val submittedCardStateFlow = observeSubmittedCardQueueStateUseCase()
+
+        private val visibleQueueFlow =
+            combine(queueFlow, submittedCardStateFlow) { queue, submittedState ->
+                val submittedCardId = submittedState.submittedCardId
+                if (submittedCardId == null) {
+                    queue.items to false
+                } else {
+                    val filtered = queue.items.filterNot { it.card.id == submittedCardId }
+                    val stillInQueue = queue.items.any { it.card.id == submittedCardId }
+                    filtered to stillInQueue
                 }
+            }
+
+        private val uiContentFlow =
+            combine(visibleQueueFlow, visibleBackCardId) { (visibleItems, stillInQueue), backCardId ->
                 val item = visibleItems.firstOrNull()
-                val isAdvancingToNextCard =
-                    currentSubmittedCardId != null &&
-                        submittedCardStillInQueue &&
-                        item == null
-                if (item?.card?.id != failedSubmitCardId.get()) {
-                    clearFailedSubmitDuration()
-                }
-                ReviewUiState(
-                    isLoading = false,
+                ReviewUiContent(
                     item = item,
                     remainingCount = visibleItems.size,
-                    isAdvancingToNextCard = isAdvancingToNextCard,
                     isBackVisible = item?.card?.id?.let { it == backCardId } ?: false,
+                    isAdvancingPossible = stillInQueue,
+                )
+            }
+
+        val uiState =
+            combine(
+                uiContentFlow,
+                isSubmitting,
+                errorMessage,
+                submittedCardStateFlow,
+            ) { content, submitting, error, submittedState ->
+                val submittedCardId = submittedState.submittedCardId
+                if (submittedCardId != null && !submittedState.isStillInRawQueue) {
+                    reviewSessionCoordinator.clearSubmittedCard(submittedCardId)
+                }
+                if (content.item?.card?.id != failedSubmitCardId.get()) {
+                    clearFailedSubmitDuration()
+                }
+                val isAdvancing =
+                    submittedCardId != null &&
+                        content.isAdvancingPossible &&
+                        content.item == null
+                ReviewUiState(
+                    isLoading = false,
+                    item = content.item,
+                    remainingCount = content.remainingCount,
+                    isAdvancingToNextCard = isAdvancing,
+                    isBackVisible = content.isBackVisible,
                     isSubmitting = submitting,
                     errorMessage = error,
                 )
@@ -102,29 +122,31 @@ class ReviewViewModel
         }
 
         fun submit(rating: ReviewRating) {
-            if (isSubmitting.value) return
             val card = uiState.value.item?.card ?: return
             val cardId = card.id
             if (reviewSessionCoordinator.submittedCardId.value == cardId) return
-            val durationMs = reviewDurationMs(cardId)
-            errorMessage.value = null
-            isSubmitting.value = true
             viewModelScope.launch {
-                try {
-                    submitReviewFeedbackUseCase(cardId, card.lastReviewAt, card.reviewCount, rating, durationMs)
-                    reviewSessionCoordinator.markSubmittedCard(cardId)
-                    answerShownAtMs.set(0L)
-                    clearFailedSubmitDuration()
-                    visibleBackCardId.value = null
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    if (failedSubmitDurationMs.compareAndSet(NO_FAILED_SUBMIT_DURATION_MS, durationMs)) {
-                        failedSubmitCardId.set(cardId)
+                submitMutex.withLock {
+                    if (isSubmitting.value) return@withLock
+                    val durationMs = reviewDurationMs(cardId)
+                    errorMessage.value = null
+                    isSubmitting.value = true
+                    try {
+                        submitReviewFeedbackUseCase(cardId, card.lastReviewAt, card.reviewCount, rating, durationMs)
+                        reviewSessionCoordinator.markSubmittedCard(cardId)
+                        answerShownAtMs.set(0L)
+                        clearFailedSubmitDuration()
+                        visibleBackCardId.value = null
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        if (failedSubmitDurationMs.compareAndSet(NO_FAILED_SUBMIT_DURATION_MS, durationMs)) {
+                            failedSubmitCardId.set(cardId)
+                        }
+                        errorMessage.value = e.toUserMessage("反馈保存失败")
+                    } finally {
+                        isSubmitting.value = false
                     }
-                    errorMessage.value = e.toUserMessage("反馈保存失败")
-                } finally {
-                    isSubmitting.value = false
                 }
             }
         }
@@ -146,3 +168,10 @@ class ReviewViewModel
     }
 
 private const val NO_FAILED_SUBMIT_DURATION_MS = -1L
+
+private data class ReviewUiContent(
+    val item: ReviewQueueItem?,
+    val remainingCount: Int,
+    val isBackVisible: Boolean,
+    val isAdvancingPossible: Boolean,
+)

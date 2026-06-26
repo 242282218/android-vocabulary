@@ -3,7 +3,6 @@ package com.zzz.androidvocab.feature.review
 import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -29,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -44,6 +43,8 @@ import com.zzz.androidvocab.core.designsystem.VocabCard
 import com.zzz.androidvocab.core.designsystem.VocabColors
 import com.zzz.androidvocab.core.designsystem.VocabControlShape
 import com.zzz.androidvocab.core.designsystem.VocabEmptyState
+import com.zzz.androidvocab.core.designsystem.VocabErrorCard
+import com.zzz.androidvocab.core.designsystem.VocabLoadingCard
 import com.zzz.androidvocab.core.designsystem.VocabPageHeader
 import com.zzz.androidvocab.core.designsystem.VocabPill
 import com.zzz.androidvocab.core.designsystem.VocabScreen
@@ -55,11 +56,12 @@ import java.util.Locale
 @Composable
 fun ReviewRoute(viewModel: ReviewViewModel = hiltViewModel()) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val speakWord = rememberWordSpeaker()
+    val wordSpeaker = rememberWordSpeaker()
     ReviewScreen(
         uiState = uiState,
         onShowBack = viewModel::showBack,
-        onSpeak = speakWord,
+        onSpeak = wordSpeaker.speak,
+        isSpeechReady = wordSpeaker.isReady,
         onSubmit = viewModel::submit,
     )
 }
@@ -69,30 +71,23 @@ fun ReviewScreen(
     uiState: ReviewUiState,
     onShowBack: () -> Unit,
     onSpeak: (String) -> Unit,
+    isSpeechReady: Boolean = true,
     onSubmit: (ReviewRating) -> Unit,
 ) {
     VocabScreen {
         ReviewHeader(uiState)
         if (uiState.isLoading) {
-            VocabCard {
-                VocabEmptyState(
-                    title = "正在加载队列",
-                    body = "正在读取本地复习状态，稍后会显示下一张卡片。",
-                )
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-            }
+            VocabLoadingCard(
+                title = "正在加载队列",
+                body = "正在读取本地复习状态，稍后会显示下一张卡片。",
+            )
             return@VocabScreen
         }
         if (uiState.isAdvancingToNextCard) {
-            VocabCard(
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-            ) {
-                VocabEmptyState(
-                    title = "正在准备下一张",
-                    body = "学习记录已经保存，正在刷新本地队列。",
-                )
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-            }
+            VocabLoadingCard(
+                title = "正在准备下一张",
+                body = "学习记录已经保存，正在刷新本地队列。",
+            )
             return@VocabScreen
         }
         val item = uiState.item
@@ -110,6 +105,7 @@ fun ReviewScreen(
             isBackVisible = uiState.isBackVisible,
             onShowBack = onShowBack,
             onSpeak = onSpeak,
+            isSpeechReady = isSpeechReady,
         )
         if (uiState.isBackVisible) {
             FeedbackButtons(
@@ -118,14 +114,13 @@ fun ReviewScreen(
             )
         }
         uiState.errorMessage?.let {
-            val isDark = isSystemInDarkTheme()
-            VocabCard(
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
-                elevated = false,
-                containerColor = if (isDark) VocabColors.ErrorCardBackgroundDark else VocabColors.ErrorCardBackground,
-                borderColor = MaterialTheme.colorScheme.error.copy(alpha = 0.24f),
-            ) {
+            VocabErrorCard {
                 Text("反馈没有保存，当前卡片已保留。", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "可以再次选择下方反馈重试。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
         }
@@ -164,44 +159,57 @@ private fun FeedbackButtons(
     isSubmitting: Boolean,
     onSubmit: (ReviewRating) -> Unit,
 ) {
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        maxItemsInEachRow = 2,
-    ) {
-        FeedbackButton(
-            label = "忘了",
-            description = "重新来",
-            rating = ReviewRating.Again,
-            isSubmitting = isSubmitting,
-            onSubmit = onSubmit,
-            modifier = Modifier.weight(1f),
-        )
-        FeedbackButton(
-            label = "模糊",
-            description = "有点卡",
-            rating = ReviewRating.Hard,
-            isSubmitting = isSubmitting,
-            onSubmit = onSubmit,
-            modifier = Modifier.weight(1f),
-        )
-        FeedbackButton(
-            label = "记得",
-            description = "正常想起",
-            rating = ReviewRating.Good,
-            isSubmitting = isSubmitting,
-            onSubmit = onSubmit,
-            modifier = Modifier.weight(1f),
-        )
-        FeedbackButton(
-            label = "熟悉",
-            description = "太简单",
-            rating = ReviewRating.Easy,
-            isSubmitting = isSubmitting,
-            onSubmit = onSubmit,
-            modifier = Modifier.weight(1f),
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (isSubmitting) {
+            Text(
+                text = "正在保存反馈，按钮暂时不可用。",
+                modifier =
+                    Modifier.semantics {
+                        liveRegion = LiveRegionMode.Polite
+                    },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            maxItemsInEachRow = 2,
+        ) {
+            FeedbackButton(
+                label = "忘了",
+                description = "重新来",
+                rating = ReviewRating.Again,
+                isSubmitting = isSubmitting,
+                onSubmit = onSubmit,
+                modifier = Modifier.weight(1f),
+            )
+            FeedbackButton(
+                label = "模糊",
+                description = "有点卡",
+                rating = ReviewRating.Hard,
+                isSubmitting = isSubmitting,
+                onSubmit = onSubmit,
+                modifier = Modifier.weight(1f),
+            )
+            FeedbackButton(
+                label = "记得",
+                description = "正常想起",
+                rating = ReviewRating.Good,
+                isSubmitting = isSubmitting,
+                onSubmit = onSubmit,
+                modifier = Modifier.weight(1f),
+            )
+            FeedbackButton(
+                label = "熟悉",
+                description = "太简单",
+                rating = ReviewRating.Easy,
+                isSubmitting = isSubmitting,
+                onSubmit = onSubmit,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
@@ -211,28 +219,16 @@ private fun ReviewWordCard(
     isBackVisible: Boolean,
     onShowBack: () -> Unit,
     onSpeak: (String) -> Unit,
+    isSpeechReady: Boolean,
 ) {
     WarmHeroCard(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .heightIn(min = 328.dp)
-                .clickable { onShowBack() },
+                .heightIn(min = 260.dp)
+                .revealAnswerClickTarget(isBackVisible = isBackVisible, onShowBack = onShowBack),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            VocabPill(text = if (item.isNew) "新词" else item.card.bookCode.displayName)
-            IconButton(onClick = { onSpeak(item.word.word) }) {
-                Icon(
-                    Icons.AutoMirrored.Outlined.VolumeUp,
-                    contentDescription = "播放发音",
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
+        ReviewWordHeader(item = item, isSpeechReady = isSpeechReady, onSpeak = onSpeak)
         Text(
             text = item.word.word,
             modifier = Modifier.fillMaxWidth(),
@@ -275,6 +271,51 @@ private fun ReviewWordCard(
 }
 
 @Composable
+private fun ReviewWordHeader(
+    item: ReviewQueueItem,
+    isSpeechReady: Boolean,
+    onSpeak: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        VocabPill(text = if (item.isNew) "新词" else item.card.bookCode.displayName)
+        IconButton(
+            enabled = isSpeechReady,
+            onClick = { onSpeak(item.word.word) },
+        ) {
+            val iconTint =
+                if (isSpeechReady) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                }
+            Icon(
+                Icons.AutoMirrored.Outlined.VolumeUp,
+                contentDescription = if (isSpeechReady) "播放发音" else "发音暂不可用",
+                tint = iconTint,
+            )
+        }
+    }
+}
+
+private fun Modifier.revealAnswerClickTarget(
+    isBackVisible: Boolean,
+    onShowBack: () -> Unit,
+): Modifier =
+    if (isBackVisible) {
+        this
+    } else {
+        clickable(
+            onClickLabel = "显示释义",
+            role = Role.Button,
+            onClick = onShowBack,
+        )
+    }
+
+@Composable
 private fun AnswerBlock(item: ReviewQueueItem) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle("释义")
@@ -298,8 +339,13 @@ private fun AnswerBlock(item: ReviewQueueItem) {
     }
 }
 
+private data class WordSpeaker(
+    val isReady: Boolean,
+    val speak: (String) -> Unit,
+)
+
 @Composable
-private fun rememberWordSpeaker(): (String) -> Unit {
+private fun rememberWordSpeaker(): WordSpeaker {
     val context = LocalContext.current
     val ttsRef = remember { mutableStateOf<TextToSpeech?>(null) }
     val isReady = remember { mutableStateOf(false) }
@@ -323,11 +369,14 @@ private fun rememberWordSpeaker(): (String) -> Unit {
             ttsRef.value = null
         }
     }
-    return { word ->
-        if (isReady.value) {
-            ttsRef.value?.speak(word, TextToSpeech.QUEUE_FLUSH, null, "review-word-$word")
-        }
-    }
+    return WordSpeaker(
+        isReady = isReady.value,
+        speak = { word ->
+            if (isReady.value) {
+                ttsRef.value?.speak(word, TextToSpeech.QUEUE_FLUSH, null, "review-word-$word")
+            }
+        },
+    )
 }
 
 @Composable

@@ -103,18 +103,15 @@ function Add-BundleToolSigningArgs {
         return $InputArgs
     }
 
-    $script:SecretDir = Join-Path $script:WorkDir 'secrets'
-    New-Item -ItemType Directory -Force -Path $script:SecretDir | Out-Null
-    $storePassFile = Join-Path $script:SecretDir 'store-pass.txt'
-    $keyPassFile = Join-Path $script:SecretDir 'key-pass.txt'
-    Set-Content -LiteralPath $storePassFile -Value $env:ANDROID_VOCAB_RELEASE_STORE_PASSWORD -NoNewline -Encoding Ascii
-    Set-Content -LiteralPath $keyPassFile -Value $env:ANDROID_VOCAB_RELEASE_KEY_PASSWORD -NoNewline -Encoding Ascii
+    # Pass signing passwords via environment variables to avoid writing plaintext to disk.
+    $env:BUNDLETOOL_STORE_PASSWORD = $env:ANDROID_VOCAB_RELEASE_STORE_PASSWORD
+    $env:BUNDLETOOL_KEY_PASSWORD = $env:ANDROID_VOCAB_RELEASE_KEY_PASSWORD
 
     return $InputArgs + @(
         "--ks=$env:ANDROID_VOCAB_RELEASE_STORE_FILE",
         "--ks-key-alias=$env:ANDROID_VOCAB_RELEASE_KEY_ALIAS",
-        "--ks-pass=file:$storePassFile",
-        "--key-pass=file:$keyPassFile"
+        "--ks-pass=env:BUNDLETOOL_STORE_PASSWORD",
+        "--key-pass=env:BUNDLETOOL_KEY_PASSWORD"
     )
 }
 
@@ -490,7 +487,6 @@ $script:SigningLabel = $null
 $script:UsesDebugSigning = $false
 $script:BundleSignatureStatus = $null
 $script:AmbiguousBundleSmokeArtifactNames = @()
-$script:SecretDir = $null
 
 try {
     $script:CurrentBundleSmokeStage = 'javaEnvironment'
@@ -556,36 +552,30 @@ try {
         $buildApksArgs += "--adb=$script:AdbPath"
     }
 
-    try {
-        $script:CurrentBundleSmokeStage = 'signingConfiguration'
-        $buildApksArgs = Add-BundleToolSigningArgs -InputArgs $buildApksArgs
-        $script:SigningLabel = if ($script:UsesDebugSigning) { 'debug-signing' } else { 'release-signing' }
-        $script:ResolvedApksPath =
-            if ([string]::IsNullOrWhiteSpace($ApksPath)) {
-                Get-DefaultApksPath
-            } else {
-                $ApksPath
-            }
-        if (-not [string]::IsNullOrWhiteSpace($ApksPath)) {
-            $apksFileName = [IO.Path]::GetFileName($script:ResolvedApksPath)
-            if ($apksFileName -notlike "*$script:SigningLabel*") {
-                Write-Warning "Custom ApksPath does not include signing label '$script:SigningLabel'. Keep the script output with this APK Set to avoid release-record ambiguity: $script:ResolvedApksPath"
-            }
-            if ((-not (Test-BundleSmokeReleaseReady)) -and $apksFileName -like 'AndroidVocabulary-release-v*.apks') {
-                Write-Warning "Custom ApksPath looks release-named while this is a local-only bundle smoke output: $script:ResolvedApksPath"
-            }
+    $script:CurrentBundleSmokeStage = 'signingConfiguration'
+    $buildApksArgs = Add-BundleToolSigningArgs -InputArgs $buildApksArgs
+    $script:SigningLabel = if ($script:UsesDebugSigning) { 'debug-signing' } else { 'release-signing' }
+    $script:ResolvedApksPath =
+        if ([string]::IsNullOrWhiteSpace($ApksPath)) {
+            Get-DefaultApksPath
+        } else {
+            $ApksPath
         }
-        Warn-IfAmbiguousBundleSmokeArtifactsExist
-        $buildApksArgs += "--output=$script:ResolvedApksPath"
-        Write-Host "[info] APK Set signing=$script:SigningLabel"
-        Write-Host "[info] bundletool build-apks: $script:ResolvedBundlePath"
-        $script:CurrentBundleSmokeStage = 'bundletoolBuildApks'
-        Invoke-BundleToolCommand 'bundletool build-apks' $buildApksArgs
-    } finally {
-        if (-not [string]::IsNullOrWhiteSpace($script:SecretDir)) {
-            Remove-Item -LiteralPath $script:SecretDir -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not [string]::IsNullOrWhiteSpace($ApksPath)) {
+        $apksFileName = [IO.Path]::GetFileName($script:ResolvedApksPath)
+        if ($apksFileName -notlike "*$script:SigningLabel*") {
+            Write-Warning "Custom ApksPath does not include signing label '$script:SigningLabel'. Keep the script output with this APK Set to avoid release-record ambiguity: $script:ResolvedApksPath"
+        }
+        if ((-not (Test-BundleSmokeReleaseReady)) -and $apksFileName -like 'AndroidVocabulary-release-v*.apks') {
+            Write-Warning "Custom ApksPath looks release-named while this is a local-only bundle smoke output: $script:ResolvedApksPath"
         }
     }
+    Warn-IfAmbiguousBundleSmokeArtifactsExist
+    $buildApksArgs += "--output=$script:ResolvedApksPath"
+    Write-Host "[info] APK Set signing=$script:SigningLabel"
+    Write-Host "[info] bundletool build-apks: $script:ResolvedBundlePath"
+    $script:CurrentBundleSmokeStage = 'bundletoolBuildApks'
+    Invoke-BundleToolCommand 'bundletool build-apks' $buildApksArgs
 
     Write-Host "[ok] APK Set: $script:ResolvedApksPath"
 

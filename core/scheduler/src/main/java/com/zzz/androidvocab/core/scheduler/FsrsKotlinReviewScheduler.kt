@@ -19,6 +19,8 @@ class FsrsKotlinReviewScheduler
         override val algorithm: SchedulerAlgorithm = SchedulerAlgorithm.Fsrs
 
         private val schedulerCache = ConcurrentHashMap<SchedulerKey, Scheduler>()
+        private val cardIdByString = ConcurrentHashMap<String, Int>()
+        private val cardIdCounter = java.util.concurrent.atomic.AtomicInteger(0)
 
         override fun schedule(input: ScheduleInput): ScheduleResult {
             val scheduler = scheduler(input.targetRetention, input.enableFuzzing)
@@ -122,7 +124,8 @@ class FsrsKotlinReviewScheduler
                 .build()
         }
 
-        private fun stableCardIntId(value: String): Int = value.hashCode() and Int.MAX_VALUE
+        private fun stableCardIntId(value: String): Int =
+            cardIdByString.getOrPut(value) { cardIdCounter.incrementAndGet() }
 
         private fun ReviewRating.toFsrsRating(): Rating =
             when (this) {
