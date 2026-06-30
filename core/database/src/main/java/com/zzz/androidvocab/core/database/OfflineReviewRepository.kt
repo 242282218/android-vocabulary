@@ -1,4 +1,4 @@
-﻿package com.zzz.androidvocab.core.database
+package com.zzz.androidvocab.core.database
 
 import android.database.sqlite.SQLiteConstraintException
 import androidx.room.withTransaction
@@ -30,7 +30,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import java.time.Instant
-import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
 @Suppress("TooManyFunctions")
@@ -44,8 +43,6 @@ class OfflineReviewRepository
         private val clockProvider: ClockProvider,
         private val integrityService: ReviewDataIntegrityService,
     ) : ReviewRepository {
-        private val repairOnce = AtomicBoolean(false)
-
         @OptIn(ExperimentalCoroutinesApi::class)
         override fun observeTodayQueue(
             now: Instant,
@@ -75,9 +72,7 @@ class OfflineReviewRepository
                     newItems = newRows.map { queueRowToItem(it, now) },
                 )
             }.onStart {
-                if (repairOnce.compareAndSet(false, true)) {
-                    repairMissingCardsFromLogs(now)
-                }
+                repairMissingCardsFromLogs(now)
             }
         }
 
@@ -94,11 +89,9 @@ class OfflineReviewRepository
                         reviewedAt = command.reviewedAt,
                     )
                     val pendingLog = preparePendingReviewLog(currentItem, command)
-                    // Persist the immutable review fact before deriving the next card snapshot.
-                    reviewDao.insertLog(pendingLog.toEntity())
                     val scheduleResult = scheduleReviewResult(currentItem.card, command)
                     val finalizedLog = pendingLog.applyScheduleSnapshot(scheduleResult)
-                    reviewDao.updateLog(finalizedLog.toEntity())
+                    reviewDao.insertLog(finalizedLog.toEntity())
                     reviewDao.upsertCard(scheduleResult.nextCard.toEntity())
                     refreshDailyStats(finalizedLog.localDay, command.reviewedAt)
                     ReviewResult(

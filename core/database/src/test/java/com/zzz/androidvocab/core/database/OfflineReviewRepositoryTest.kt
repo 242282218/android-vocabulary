@@ -925,6 +925,75 @@ class OfflineReviewRepositoryTest {
             assertEquals(laterReviewAt, repairedCard?.lastReviewAt)
             assertEquals(2, repairedCard?.reviewCount)
         }
+
+    @Test
+    fun inspectAndRepairDetectRetrievabilityTimelineConflicts() =
+        runTest {
+            val firstReviewAt = Instant.parse("2026-05-16T08:00:00Z")
+            val secondReviewAt = Instant.parse("2026-05-16T09:00:00Z")
+            seedWord(database, clock, wordId = "retention-word", value = "retention", orderIndex = 0)
+            val timelineCardId = cardId("retention-word", BookCode.CET4.name)
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "retention-log-first",
+                    cardId = timelineCardId,
+                    wordId = "retention-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Good.wireName,
+                    reviewedAt = firstReviewAt,
+                    localDay = "2026-05-16",
+                    elapsedDays = null,
+                    scheduledDaysBefore = 0,
+                    scheduledDaysAfter = 3,
+                    difficultyBefore = null,
+                    difficultyAfter = 0.8,
+                    stabilityBefore = null,
+                    stabilityAfter = 3.0,
+                    retrievabilityBefore = null,
+                    retrievabilityAfter = 0.8,
+                    durationMs = 500,
+                    targetRetention = 0.8,
+                    algorithm = "fsrs",
+                    algorithmVersion = "test",
+                    stateAfter = ReviewState.Review.name,
+                    dueAtAfter = firstReviewAt.plusSeconds(3 * SECONDS_PER_DAY),
+                ),
+            )
+            database.reviewDao().insertLog(
+                ReviewLogEntity(
+                    id = "retention-log-second",
+                    cardId = timelineCardId,
+                    wordId = "retention-word",
+                    bookCode = BookCode.CET4.name,
+                    rating = ReviewRating.Hard.wireName,
+                    reviewedAt = secondReviewAt,
+                    localDay = "2026-05-16",
+                    elapsedDays = 0,
+                    scheduledDaysBefore = 3,
+                    scheduledDaysAfter = 4,
+                    difficultyBefore = 0.8,
+                    difficultyAfter = 0.9,
+                    stabilityBefore = 3.0,
+                    stabilityAfter = 4.0,
+                    retrievabilityBefore = 0.7,
+                    retrievabilityAfter = 0.9,
+                    durationMs = 500,
+                    targetRetention = 0.8,
+                    algorithm = "fsrs",
+                    algorithmVersion = "test",
+                    stateAfter = ReviewState.Review.name,
+                    dueAtAfter = secondReviewAt.plusSeconds(4 * SECONDS_PER_DAY),
+                ),
+            )
+
+            val repairResult = repository.repairReviewDataCache()
+            val reportAfter = repairResult.after
+
+            assertEquals(1, repairResult.timelineConflictCacheRebuiltCount)
+            assertEquals(1, reportAfter.timelineConflictCardCount)
+            assertEquals(1, reportAfter.manualReviewIssueCount)
+            assertEquals(0, reportAfter.repairableIssueCount)
+        }
 }
 
 private const val PENDING_REVIEW_LOG_VERSION = "<pending>"

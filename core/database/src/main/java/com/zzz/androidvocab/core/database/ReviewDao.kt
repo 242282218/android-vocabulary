@@ -22,9 +22,6 @@ interface ReviewDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertLog(log: ReviewLogEntity)
 
-    @Update
-    suspend fun updateLog(log: ReviewLogEntity)
-
     @Query("SELECT * FROM review_cards WHERE id = :cardId")
     suspend fun getCard(cardId: String): ReviewCardEntity?
 
@@ -45,6 +42,18 @@ interface ReviewDao {
 
     @Query("SELECT * FROM review_logs WHERE cardId = :cardId ORDER BY reviewedAt ASC, id ASC")
     suspend fun getLogs(cardId: String): List<ReviewLogEntity>
+
+    @Query(
+        """
+        SELECT l.* FROM valid_review_logs l
+        WHERE l.wordId = :wordId AND l.bookCode = :bookCode
+        ORDER BY l.reviewedAt ASC, l.id ASC
+        """,
+    )
+    suspend fun getValidLogsByWordAndBook(
+        wordId: String,
+        bookCode: String,
+    ): List<ReviewLogEntity>
 
     @Query(
         """
@@ -138,7 +147,21 @@ interface ReviewDao {
           GROUP BY cardId
         ) d ON d.cardId = v.cardId
         WHERE v.cardId IS NOT NULL AND v.dueAt IS NOT NULL AND v.dueAt <= :now AND v.bookCode IN (:bookCodes)
-        ORDER BY v.dueAt ASC, IFNULL(d.difficultyScore, 0) DESC, v.lapseCount DESC
+        ORDER BY
+          v.dueAt ASC,
+          IFNULL(d.difficultyScore, 0) DESC,
+          v.lapseCount DESC,
+          CASE v.bookCode
+            WHEN 'CET4' THEN 0
+            WHEN 'CET6' THEN 1
+            WHEN 'KAOYAN' THEN 2
+            WHEN 'IELTS' THEN 3
+            WHEN 'TOEFL' THEN 4
+            ELSE 99
+          END ASC,
+          v.orderIndex ASC,
+          v.wordId ASC,
+          v.cardId ASC
         LIMIT 200
         """,
     )
@@ -164,7 +187,16 @@ interface ReviewDao {
             WHERE l.wordId = v.wordId AND l.bookCode = v.bookCode
           )
           AND v.bookCode IN (:bookCodes)
-        ORDER BY v.bookCode ASC, v.orderIndex ASC
+        ORDER BY
+          CASE v.bookCode
+            WHEN 'CET4' THEN 0
+            WHEN 'CET6' THEN 1
+            WHEN 'KAOYAN' THEN 2
+            WHEN 'IELTS' THEN 3
+            WHEN 'TOEFL' THEN 4
+            ELSE 99
+          END ASC,
+          v.orderIndex ASC
         LIMIT :limit
         """,
     )

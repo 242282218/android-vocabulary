@@ -100,13 +100,105 @@ class OfflineStatsRepositoryTest {
                 .observeReviewLoad(
                     days = 3,
                     now = now,
-                    selectedBooks = setOf(BookCode.CET4, BookCode.TOEFL),
+                    selectedBooks = linkedSetOf(BookCode.TOEFL, BookCode.CET6),
                 ).first()
 
             assertEquals(
-                listOf(listOf(BookCode.CET4.name, BookCode.TOEFL.name)),
+                listOf(listOf(BookCode.CET6.name, BookCode.TOEFL.name)),
                 statsDao.observedDueCardBookCodes,
             )
+        }
+
+    @Test
+    fun reviewLoadExpandsEmptySelectedBooksInBookOrder() =
+        runTest {
+            val statsDao = FakeStatsDao(dueCards = listOf(DueCardRow(now)))
+            val repository =
+                OfflineStatsRepository(
+                    statsDao = statsDao,
+                    clockProvider = FixedClock(now),
+                    scheduler = FakeScheduler(),
+                    settingsRepository = FakeSettingsRepository(defaultSettings),
+                )
+
+            repository
+                .observeReviewLoad(
+                    days = 1,
+                    now = now,
+                    selectedBooks = emptySet(),
+                ).first()
+
+            assertEquals(
+                listOf(BookCode.entries.map { it.name }),
+                statsDao.observedDueCardBookCodes,
+            )
+        }
+
+    @Test
+    fun scopedStatsQueriesExpandEmptySelectedBooksInBookOrder() =
+        runTest {
+            val expectedBookCodes = BookCode.entries.map { it.name }
+            val statsDao =
+                FakeStatsDao(
+                    dailyStatsByBookCodes =
+                        mapOf(
+                            expectedBookCodes to
+                                ReviewDailyStatsView(
+                                    localDay = "2026-05-16",
+                                    newCount = 1,
+                                    reviewCount = 0,
+                                    againCount = 0,
+                                    hardCount = 0,
+                                    goodCount = 1,
+                                    easyCount = 0,
+                                    completedCount = 1,
+                                    durationMs = 1_000L,
+                                    recallAccuracy = 1.0,
+                                    passRate = 1.0,
+                                    estimatedMinutes = 0,
+                                ),
+                        ),
+                    averageDurationByBookCodes = mapOf(expectedBookCodes to 1_000.0),
+                    reviewedCardsByBookCodes = mapOf(expectedBookCodes to listOf(reviewCard(retrievability = 0.90))),
+                    activeDaysByBookCodes = mapOf(expectedBookCodes to listOf("2026-05-16")),
+                    dailyActivityRowsByBookCodes =
+                        mapOf(
+                            expectedBookCodes to
+                                listOf(
+                                    DailyActivityRow(
+                                        localDay = "2026-05-16",
+                                        reviewCount = 1,
+                                    ),
+                                ),
+                        ),
+                    difficultWordRowsByBookCodes = mapOf(expectedBookCodes to emptyList()),
+                )
+            val repository =
+                OfflineStatsRepository(
+                    statsDao = statsDao,
+                    clockProvider = FixedClock(now),
+                    scheduler = FakeScheduler(),
+                    settingsRepository = FakeSettingsRepository(defaultSettings),
+                )
+
+            repository
+                .observeTodayStats(LocalDate.parse("2026-05-16"), now, emptySet())
+                .first()
+            repository
+                .observeAverageReviewDurationMs(7, LocalDate.parse("2026-05-16"), emptySet())
+                .first()
+            repository.observeDailyActivity(7, LocalDate.parse("2026-05-16"), emptySet()).first()
+            repository.observeRetentionStats(30, now, emptySet()).first()
+            repository.observeStreakStats(LocalDate.parse("2026-05-16"), emptySet()).first()
+            repository.observeDifficultWords(30, now, emptySet()).first()
+
+            assertEquals(listOf(expectedBookCodes), statsDao.observedTodayStatsBookCodes)
+            assertEquals(listOf(expectedBookCodes), statsDao.observedDueCountBookCodes)
+            assertEquals(listOf(expectedBookCodes), statsDao.observedAverageDurationBookCodes)
+            assertEquals(listOf(expectedBookCodes), statsDao.observedDailyActivityBookCodes)
+            assertEquals(listOf(expectedBookCodes), statsDao.observedReviewedCardsBookCodes)
+            assertEquals(listOf(expectedBookCodes), statsDao.observedActiveDaysBookCodes)
+            assertEquals(listOf(expectedBookCodes), statsDao.observedDifficultWordBookCodes)
         }
 
     @Test
@@ -510,6 +602,7 @@ private class FakeStatsDao(
     val observedReviewedCardsFrom = mutableListOf<Instant>()
     val observedDifficultWordRowsFrom = mutableListOf<Instant>()
     val observedDueCardBookCodes = mutableListOf<List<String>>()
+    val observedDueCountBookCodes = mutableListOf<List<String>>()
     val observedTodayStatsBookCodes = mutableListOf<List<String>>()
     val observedAverageDurationBookCodes = mutableListOf<List<String>>()
     val observedReviewedCardsBookCodes = mutableListOf<List<String>>()
@@ -564,7 +657,10 @@ private class FakeStatsDao(
     override fun observeDueCount(
         now: Instant,
         bookCodes: List<String>,
-    ): Flow<Int> = flowOf(dueCount)
+    ): Flow<Int> {
+        observedDueCountBookCodes += bookCodes
+        return flowOf(dueCount)
+    }
 
     override fun observeBookTotals(): Flow<List<BookCountRow>> = flowOf(bookTotals)
 

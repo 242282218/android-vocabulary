@@ -355,6 +355,61 @@ class DailyStatsCacheRebuildTest {
             assertEquals(listOf("cet4-word"), difficultWords.map { it.wordId })
         }
 
+    @Test
+    fun difficultWordQueryUsesStableTieBreakers() =
+        runTest {
+            val now = Instant.parse("2026-05-16T10:00:00Z")
+            seedWordMembership(now, wordId = "word-c", value = "careful")
+            seedWordMembership(now, wordId = "word-b", value = "brittle")
+            seedWordMembership(now, wordId = "word-a", value = "awkward")
+            database.reviewDao().insertLog(
+                reviewLog(
+                    id = "word-c-again",
+                    wordId = "word-c",
+                    rating = ReviewRating.Again,
+                    reviewedAt = Instant.parse("2026-05-16T08:00:00Z"),
+                    durationMs = 30_000,
+                ),
+            )
+            database.reviewDao().insertLog(
+                reviewLog(
+                    id = "word-b-hard-1",
+                    wordId = "word-b",
+                    rating = ReviewRating.Hard,
+                    reviewedAt = Instant.parse("2026-05-16T08:05:00Z"),
+                    durationMs = 30_000,
+                ),
+            )
+            database.reviewDao().insertLog(
+                reviewLog(
+                    id = "word-b-hard-2",
+                    wordId = "word-b",
+                    rating = ReviewRating.Hard,
+                    reviewedAt = Instant.parse("2026-05-16T08:10:00Z"),
+                    durationMs = 30_000,
+                ),
+            )
+            database.reviewDao().insertLog(
+                reviewLog(
+                    id = "word-a-again",
+                    wordId = "word-a",
+                    rating = ReviewRating.Again,
+                    reviewedAt = Instant.parse("2026-05-16T08:15:00Z"),
+                    durationMs = 30_000,
+                ),
+            )
+
+            val difficultWords =
+                database
+                    .statsDao()
+                    .observeDifficultWordRows(
+                        from = Instant.parse("2026-05-15T00:00:00Z"),
+                        bookCodes = listOf(BookCode.CET4.name),
+                    ).first()
+
+            assertEquals(listOf("word-a", "word-c", "word-b"), difficultWords.map { it.wordId })
+        }
+
     private fun reviewLog(
         id: String,
         wordId: String = WORD_ID,

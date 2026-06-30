@@ -11,6 +11,7 @@ import io.github.openspacedrepetition.Scheduler
 import io.github.openspacedrepetition.State
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 
 class FsrsKotlinReviewScheduler
@@ -20,7 +21,7 @@ class FsrsKotlinReviewScheduler
 
         private val schedulerCache = ConcurrentHashMap<SchedulerKey, Scheduler>()
         private val cardIdByString = ConcurrentHashMap<String, Int>()
-        private val cardIdCounter = java.util.concurrent.atomic.AtomicInteger(0)
+        private val cardIdCounter = AtomicInteger(0)
 
         override fun schedule(input: ScheduleInput): ScheduleResult {
             val scheduler = scheduler(input.targetRetention, input.enableFuzzing)

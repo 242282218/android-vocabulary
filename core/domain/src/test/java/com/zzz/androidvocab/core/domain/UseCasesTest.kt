@@ -170,6 +170,33 @@ class UseCasesTest {
         }
 
     @Test
+    fun bookProgressUsesProductOrderWhenSelectionIsEmpty() =
+        runTest {
+            val now = Instant.parse("2026-05-16T08:00:00Z")
+            val useCase =
+                GetBookProgressUseCase(
+                    vocabularyRepository =
+                        RecordingVocabularyRepository(
+                            progress =
+                                listOf(
+                                    BookProgress(BookCode.TOEFL, 20, 2, 1, 2),
+                                    BookProgress(BookCode.CET4, 10, 1, 0, 1),
+                                    BookProgress(BookCode.IELTS, 30, 3, 1, 0),
+                                ),
+                        ),
+                    settingsRepository =
+                        FakeSettingsRepository(
+                            AppSettings(selectedBooks = emptySet()),
+                        ),
+                    clockProvider = SequenceClockProvider(listOf(now)),
+                )
+
+            val progress = useCase().take(1).toList().single()
+
+            assertEquals(listOf(BookCode.CET4, BookCode.IELTS, BookCode.TOEFL), progress.map { it.bookCode })
+        }
+
+    @Test
     fun estimateRemainingMinutesUsesAverageDuration() {
         assertEquals(2, estimateRemainingMinutes(remainingCount = 20, averageDurationMs = 3_500L))
     }
@@ -264,6 +291,46 @@ class UseCasesTest {
 
             assertEquals(listOf(setOf(BookCode.TOEFL)), statsRepository.observedTodayStatsBooks)
             assertEquals(listOf(setOf(BookCode.TOEFL)), statsRepository.observedAverageDurationBooks)
+        }
+
+    @Test
+    fun todayOverviewExposesSelectedBooksInBookOrder() =
+        runTest {
+            val now = Instant.parse("2026-05-16T08:00:00Z")
+            val useCase =
+                GetTodayOverviewUseCase(
+                    reviewRepository = RecordingReviewRepository(),
+                    statsRepository = RecordingStatsRepository(),
+                    settingsRepository =
+                        FakeSettingsRepository(
+                            AppSettings(selectedBooks = linkedSetOf(BookCode.TOEFL, BookCode.CET4)),
+                        ),
+                    clockProvider = SequenceClockProvider(listOf(now)),
+                )
+
+            val overview = useCase().take(1).toList().single()
+
+            assertEquals(listOf(BookCode.CET4, BookCode.TOEFL), overview.selectedBooks)
+        }
+
+    @Test
+    fun todayOverviewExposesAllBooksWhenSelectionIsEmpty() =
+        runTest {
+            val now = Instant.parse("2026-05-16T08:00:00Z")
+            val useCase =
+                GetTodayOverviewUseCase(
+                    reviewRepository = RecordingReviewRepository(),
+                    statsRepository = RecordingStatsRepository(),
+                    settingsRepository =
+                        FakeSettingsRepository(
+                            AppSettings(selectedBooks = emptySet()),
+                        ),
+                    clockProvider = SequenceClockProvider(listOf(now)),
+                )
+
+            val overview = useCase().take(1).toList().single()
+
+            assertEquals(BookCode.entries, overview.selectedBooks)
         }
 
     @Test

@@ -48,6 +48,14 @@ class StatsViewModelTest {
     }
 
     @Test
+    fun activityHeatmapLevelKeepsLowNonZeroActivityVisible() {
+        assertEquals(0, activityHeatmapLevel(reviewCount = 0, maxReviewCount = 8))
+        assertEquals(1, activityHeatmapLevel(reviewCount = 1, maxReviewCount = 8))
+        assertEquals(4, activityHeatmapLevel(reviewCount = 8, maxReviewCount = 8))
+        assertEquals(0, activityHeatmapLevel(reviewCount = 1, maxReviewCount = 0))
+    }
+
+    @Test
     fun initialStateIsLoadingUntilStatsArrive() =
         runTest {
             Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
@@ -134,7 +142,7 @@ class StatsViewModelTest {
             Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
             val settingsRepository =
                 FakeSettingsRepository(
-                    AppSettings(selectedBooks = setOf(BookCode.CET6, BookCode.TOEFL)),
+                    AppSettings(selectedBooks = linkedSetOf(BookCode.TOEFL, BookCode.CET6)),
                 )
             val viewModel =
                 createViewModel(
@@ -146,6 +154,26 @@ class StatsViewModelTest {
             val state = viewModel.uiState.first { !it.isLoading }
 
             assertEquals(listOf(BookCode.CET6, BookCode.TOEFL), state.selectedBooks)
+        }
+
+    @Test
+    fun exposesAllBooksWhenSelectionIsEmpty() =
+        runTest {
+            Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+            val settingsRepository =
+                FakeSettingsRepository(
+                    AppSettings(selectedBooks = emptySet()),
+                )
+            val viewModel =
+                createViewModel(
+                    statsRepo = FakeStatsRepository(),
+                    vocabRepo = FakeVocabRepository(),
+                    settingsRepository = settingsRepository,
+                )
+
+            val state = viewModel.uiState.first { !it.isLoading }
+
+            assertEquals(BookCode.entries, state.selectedBooks)
         }
 
     @Test

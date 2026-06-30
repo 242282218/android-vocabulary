@@ -54,6 +54,12 @@ private data class ExportUiState(
     val inProgress: Boolean = false,
 )
 
+private data class SettingsErrorUiState(
+    val learningSettingsErrorMessage: String? = null,
+    val themeErrorMessage: String? = null,
+    val reminderErrorMessage: String? = null,
+)
+
 @HiltViewModel
 class SettingsViewModel
     @Inject
@@ -74,110 +80,89 @@ class SettingsViewModel
         private val dataMaintenance = MutableStateFlow(DataMaintenanceUiState())
 
         val uiState =
-            combine(exportResult, exportErrorMessage, isExporting) { result, errorMessage, inProgress ->
-                ExportUiState(result = result, errorMessage = errorMessage, inProgress = inProgress)
-            }.let { exportState ->
-                combine(
-                    observeSettingsUseCase(),
-                    vocabularyRepository.observeSourceInfo(),
-                    exportState,
-                ) { settings, sources, export ->
-                    Triple(settings, sources, export)
-                }
-            }.let { baseState ->
-                combine(
-                    baseState,
-                    learningSettingsErrorMessage,
-                    themeErrorMessage,
-                    reminderErrorMessage,
-                ) { base, learningSettingsError, themeError, reminderError ->
-                    SettingsUiState(
-                        settings = base.first,
-                        sources = base.second,
-                        exportResult = base.third.result,
-                        exportErrorMessage = base.third.errorMessage,
-                        isExporting = base.third.inProgress,
+            combine(
+                observeSettingsUseCase(),
+                vocabularyRepository.observeSourceInfo(),
+                combine(exportResult, exportErrorMessage, isExporting) { result, errorMessage, inProgress ->
+                    ExportUiState(result = result, errorMessage = errorMessage, inProgress = inProgress)
+                },
+                combine(learningSettingsErrorMessage, themeErrorMessage, reminderErrorMessage) {
+                    learningSettingsError,
+                    themeError,
+                    reminderError,
+                    ->
+                    SettingsErrorUiState(
                         learningSettingsErrorMessage = learningSettingsError,
                         themeErrorMessage = themeError,
                         reminderErrorMessage = reminderError,
                     )
-                }
-            }.let { baseState ->
-                combine(baseState, dataMaintenance) { state, maintenance ->
-                    state.copy(dataMaintenance = maintenance)
-                }
+                },
+                dataMaintenance,
+            ) { settings, sources, export, errors, maintenance ->
+                SettingsUiState(
+                    settings = settings,
+                    sources = sources,
+                    exportResult = export.result,
+                    exportErrorMessage = export.errorMessage,
+                    isExporting = export.inProgress,
+                    learningSettingsErrorMessage = errors.learningSettingsErrorMessage,
+                    themeErrorMessage = errors.themeErrorMessage,
+                    reminderErrorMessage = errors.reminderErrorMessage,
+                    dataMaintenance = maintenance,
+                )
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
-        fun updateDailyLimit(value: Int) {
-            viewModelScope.launch {
-                learningSettingsErrorMessage.value = null
-                try {
-                    updateSettingsUseCase.dailyNewLimit(value)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    learningSettingsErrorMessage.value = e.toLearningSettingsMessage()
-                }
-            }
-        }
+        fun updateDailyLimit(value: Int) =
+            runSettingsAction(
+                errorFlow = learningSettingsErrorMessage,
+                onError = Throwable::toLearningSettingsMessage,
+            ) { updateSettingsUseCase.dailyNewLimit(value) }
 
-        fun updateTheme(themeMode: ThemeMode) {
-            viewModelScope.launch {
-                themeErrorMessage.value = null
-                try {
-                    updateSettingsUseCase.themeMode(themeMode)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    themeErrorMessage.value = e.toThemeSettingsMessage()
-                }
-            }
-        }
+        fun updateTheme(themeMode: ThemeMode) =
+            runSettingsAction(
+                errorFlow = themeErrorMessage,
+                onError = Throwable::toThemeSettingsMessage,
+            ) { updateSettingsUseCase.themeMode(themeMode) }
 
-        fun updateTargetRetention(value: Double) {
-            viewModelScope.launch {
-                learningSettingsErrorMessage.value = null
-                try {
-                    updateSettingsUseCase.targetRetention(value)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    learningSettingsErrorMessage.value = e.toLearningSettingsMessage()
-                }
-            }
-        }
+        fun updateTargetRetention(value: Double) =
+            runSettingsAction(
+                errorFlow = learningSettingsErrorMessage,
+                onError = Throwable::toLearningSettingsMessage,
+            ) { updateSettingsUseCase.targetRetention(value) }
 
-        fun updateReminder(enabled: Boolean) {
-            viewModelScope.launch {
-                reminderErrorMessage.value = null
-                try {
-                    updateSettingsUseCase.reminderEnabled(enabled)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    reminderErrorMessage.value = e.toReminderSettingsMessage()
-                }
-            }
-        }
+        fun updateReminder(enabled: Boolean) =
+            runSettingsAction(
+                errorFlow = reminderErrorMessage,
+                onError = Throwable::toReminderSettingsMessage,
+            ) { updateSettingsUseCase.reminderEnabled(enabled) }
 
         fun updateReminderTime(
             hour: Int,
             minute: Int,
-        ) {
-            viewModelScope.launch {
-                reminderErrorMessage.value = null
-                try {
-                    updateSettingsUseCase.reminderTime(hour, minute)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    reminderErrorMessage.value = e.toReminderSettingsMessage()
-                }
-            }
-        }
+        ) = runSettingsAction(
+            errorFlow = reminderErrorMessage,
+            onError = Throwable::toReminderSettingsMessage,
+        ) { updateSettingsUseCase.reminderTime(hour, minute) }
 
         fun showReminderPermissionDenied() {
             reminderErrorMessage.value = "通知权限未开启，无法发送每日提醒。"
+        }
+
+        private fun runSettingsAction(
+            errorFlow: MutableStateFlow<String?>,
+            onError: (Throwable) -> String,
+            action: suspend () -> Unit,
+        ) {
+            viewModelScope.launch {
+                errorFlow.value = null
+                try {
+                    action()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    errorFlow.value = onError(e)
+                }
+            }
         }
 
         fun exportData() {
@@ -266,38 +251,22 @@ private fun ReviewDataRepairResult.toUserMessage(): String {
     }
 }
 
-private fun Throwable.toReminderSettingsMessage(): String =
+private fun Throwable.toSettingsErrorMessage(prefix: String): String =
     when (this) {
         is AppException ->
             when (error) {
                 is AppError.DatabaseWriteFailed ->
-                    "提醒设置保存失败：${(error as AppError.DatabaseWriteFailed).reason}"
+                    "${prefix}保存失败：${(error as AppError.DatabaseWriteFailed).reason}"
                 else -> error.userMessage
             }
-        else -> message ?: "提醒设置保存失败"
+        else -> message ?: "${prefix}保存失败"
     }
 
-private fun Throwable.toLearningSettingsMessage(): String =
-    when (this) {
-        is AppException ->
-            when (error) {
-                is AppError.DatabaseWriteFailed ->
-                    "学习设置保存失败：${(error as AppError.DatabaseWriteFailed).reason}"
-                else -> error.userMessage
-            }
-        else -> message ?: "学习设置保存失败"
-    }
+private fun Throwable.toReminderSettingsMessage(): String = toSettingsErrorMessage("提醒设置")
 
-private fun Throwable.toThemeSettingsMessage(): String =
-    when (this) {
-        is AppException ->
-            when (error) {
-                is AppError.DatabaseWriteFailed ->
-                    "外观设置保存失败：${(error as AppError.DatabaseWriteFailed).reason}"
-                else -> error.userMessage
-            }
-        else -> message ?: "外观设置保存失败"
-    }
+private fun Throwable.toLearningSettingsMessage(): String = toSettingsErrorMessage("学习设置")
+
+private fun Throwable.toThemeSettingsMessage(): String = toSettingsErrorMessage("外观设置")
 
 private fun ReviewDataIntegrityReport.toUserMessage(): String =
     if (issueCount == 0) {

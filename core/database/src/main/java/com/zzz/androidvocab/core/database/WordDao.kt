@@ -108,7 +108,22 @@ interface WordDao {
     @Query("SELECT * FROM word_entries WHERE id = :wordId")
     fun observeWord(wordId: String): Flow<WordEntryEntity?>
 
-    @Query("SELECT * FROM wordbook_memberships WHERE wordId = :wordId ORDER BY bookCode ASC")
+    @Query(
+        """
+        SELECT * FROM wordbook_memberships
+        WHERE wordId = :wordId
+        ORDER BY
+          CASE bookCode
+            WHEN 'CET4' THEN 0
+            WHEN 'CET6' THEN 1
+            WHEN 'KAOYAN' THEN 2
+            WHEN 'IELTS' THEN 3
+            WHEN 'TOEFL' THEN 4
+            ELSE 99
+          END ASC,
+          orderIndex ASC
+        """,
+    )
     fun observeMemberships(wordId: String): Flow<List<WordBookMembershipEntity>>
 
     @Query("SELECT * FROM word_aliases WHERE wordId = :wordId ORDER BY value ASC")

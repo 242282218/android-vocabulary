@@ -22,8 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Remove
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,8 +41,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,12 +54,17 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.zzz.androidvocab.core.designsystem.PrimaryAction
+import com.zzz.androidvocab.core.designsystem.SecondaryAction
 import com.zzz.androidvocab.core.designsystem.SectionTitle
 import com.zzz.androidvocab.core.designsystem.VocabCard
 import com.zzz.androidvocab.core.designsystem.VocabControlShape
+import com.zzz.androidvocab.core.designsystem.VocabEmptyState
+import com.zzz.androidvocab.core.designsystem.VocabFilterChip
+import com.zzz.androidvocab.core.designsystem.VocabInlineError
 import com.zzz.androidvocab.core.designsystem.VocabPageHeader
 import com.zzz.androidvocab.core.designsystem.VocabPill
 import com.zzz.androidvocab.core.designsystem.VocabScreen
+import com.zzz.androidvocab.core.designsystem.vocabErrorBorderColor
 import com.zzz.androidvocab.core.model.AppSettings
 import com.zzz.androidvocab.core.model.ExportResult
 import com.zzz.androidvocab.core.model.SourceInfo
@@ -102,6 +107,7 @@ fun SettingsRoute(viewModel: SettingsViewModel = hiltViewModel()) {
         onReminderTimeChange = viewModel::updateReminderTime,
         onOpenNotificationSettings = { context.openNotificationSettings() },
         onExport = viewModel::exportData,
+        onShareExport = { result -> context.shareExport(result) },
         onInspectLearningData = viewModel::inspectLearningData,
         onRepairLearningData = viewModel::repairLearningData,
     )
@@ -118,6 +124,7 @@ fun SettingsScreen(
     onReminderTimeChange: (Int, Int) -> Unit,
     onOpenNotificationSettings: () -> Unit,
     onExport: () -> Unit,
+    onShareExport: (ExportResult) -> Unit = {},
     onInspectLearningData: () -> Unit,
     onRepairLearningData: () -> Unit,
 ) {
@@ -150,6 +157,7 @@ fun SettingsScreen(
             exportResult = uiState.exportResult,
             exportErrorMessage = uiState.exportErrorMessage,
             onExport = onExport,
+            onShareExport = onShareExport,
         )
         DataMaintenanceCard(
             dataMaintenance = uiState.dataMaintenance,
@@ -158,6 +166,12 @@ fun SettingsScreen(
         )
         VocabCard(elevated = false) {
             SectionTitle("词库来源与许可证")
+            if (uiState.sources.isEmpty()) {
+                VocabEmptyState(
+                    title = "暂无来源信息",
+                    body = "词库导入完成后，这里会显示来源、许可证和发布阻断状态。",
+                )
+            }
             uiState.sources.forEach { source -> SourceRow(source) }
         }
     }
@@ -183,6 +197,11 @@ private fun LearningSettingsCard(
             value = dailyLimitSlider,
             onValueChange = { dailyLimitSlider = it },
             onValueChangeFinished = { onDailyLimitChange(dailyLimitSlider.roundToInt()) },
+            modifier =
+                Modifier.semantics {
+                    contentDescription = "每日新词上限"
+                    stateDescription = "${dailyLimitSlider.roundToInt()} 个"
+                },
             valueRange = 0f..100f,
             steps = 99,
         )
@@ -207,6 +226,11 @@ private fun LearningSettingsCard(
             onValueChangeFinished = {
                 onTargetRetentionChange((retentionSlider * 100).roundToInt() / 100.0)
             },
+            modifier =
+                Modifier.semantics {
+                    contentDescription = "目标保持率"
+                    stateDescription = "${(retentionSlider * 100).roundToInt()}%"
+                },
             valueRange = 0.7f..0.98f,
             steps = 27,
         )
@@ -216,10 +240,9 @@ private fun LearningSettingsCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         errorMessage?.let {
-            Text(
-                it,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
+            VocabInlineError(
+                text = it,
+                supportingText = "当前学习设置已保留，可以再次调整后重试。",
             )
         }
     }
@@ -238,7 +261,7 @@ private fun ReminderCard(
         elevated = false,
         borderColor =
             if (reminderNotificationState.hasVisibleRisk(settings.reminderEnabled)) {
-                MaterialTheme.colorScheme.error.copy(alpha = 0.24f)
+                vocabErrorBorderColor()
             } else {
                 MaterialTheme.colorScheme.outline
             },
@@ -253,11 +276,7 @@ private fun ReminderCard(
             detail = reminderNotificationState.statusSummary(settings.reminderEnabled),
         )
         val reminderTimeText =
-            formatReminderSummary(
-                settings.reminderEnabled,
-                settings.reminderHour,
-                settings.reminderMinute,
-            )
+            formatReminderSummary(settings.reminderEnabled, settings.reminderHour, settings.reminderMinute)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -268,7 +287,15 @@ private fun ReminderCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Switch(checked = settings.reminderEnabled, onCheckedChange = onReminderChange)
+            Switch(
+                checked = settings.reminderEnabled,
+                onCheckedChange = onReminderChange,
+                modifier =
+                    Modifier.semantics {
+                        contentDescription = "每日提醒"
+                        stateDescription = if (settings.reminderEnabled) "已开启" else "已关闭"
+                    },
+            )
         }
         if (settings.reminderEnabled) {
             ReminderTimeStepper(
@@ -278,7 +305,7 @@ private fun ReminderCard(
             )
         }
         reminderErrorMessage?.let {
-            Text(it, color = MaterialTheme.colorScheme.error)
+            VocabInlineError(text = it, supportingText = "当前提醒设置已保留，可以再次开启或调整时间重试。")
         }
         ReminderRecovery(
             showPermissionRecovery = showPermissionRecovery,
@@ -318,7 +345,11 @@ private fun ReminderRecoveryMessage(
         color = MaterialTheme.colorScheme.error,
         style = MaterialTheme.typography.bodySmall,
     )
-    OutlinedButton(onClick = onOpenNotificationSettings) {
+    OutlinedButton(
+        modifier = Modifier.heightIn(min = 48.dp),
+        onClick = onOpenNotificationSettings,
+        shape = VocabControlShape,
+    ) {
         Icon(Icons.Outlined.Notifications, contentDescription = null)
         Spacer(Modifier.width(8.dp))
         Text("打开通知设置")
@@ -339,26 +370,17 @@ private fun ThemeCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             ThemeMode.entries.forEach { mode ->
-                FilterChip(
+                VocabFilterChip(
+                    text = mode.displayName(),
                     selected = currentTheme == mode,
                     onClick = { onThemeChange(mode) },
-                    label = { Text(mode.displayName()) },
-                    shape = VocabControlShape,
-                    colors =
-                        FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
                 )
             }
         }
         errorMessage?.let {
-            Text(
-                it,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
+            VocabInlineError(
+                text = it,
+                supportingText = "当前外观设置已保留，可以再次选择主题重试。",
             )
         }
     }
@@ -370,6 +392,7 @@ private fun DataExportCard(
     exportResult: ExportResult?,
     exportErrorMessage: String?,
     onExport: () -> Unit,
+    onShareExport: (ExportResult) -> Unit,
 ) {
     VocabCard(elevated = false) {
         SectionTitle("数据导出")
@@ -379,54 +402,80 @@ private fun DataExportCard(
             modifier = Modifier.fillMaxWidth(),
             enabled = !isExporting,
         )
-        exportResult?.let {
-            Column(
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                VocabPill(
-                    text = "导出完成",
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-                Text(
-                    it.fileName,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    "保存路径",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    it.absolutePath,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+        DataExportFeedback(
+            exportResult = exportResult,
+            exportErrorMessage = exportErrorMessage,
+            onShareExport = onShareExport,
+        )
+    }
+}
+
+@Composable
+private fun DataExportFeedback(
+    exportResult: ExportResult?,
+    exportErrorMessage: String?,
+    onShareExport: (ExportResult) -> Unit,
+) {
+    exportResult?.let { result ->
+        val exportDescription =
+            "导出完成，文件 ${result.fileName}，本机路径 ${result.absolutePath}，可通过系统分享保存或发送。"
+        Column(
+            modifier =
+                Modifier.semantics {
+                    liveRegion = LiveRegionMode.Polite
+                    contentDescription = exportDescription
+                },
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            VocabPill(
+                text = "导出完成",
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            Text(
+                result.fileName,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "文件已导出，可通过系统分享保存到其他位置或发送给自己。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "保存路径",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                result.absolutePath,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            SecondaryAction(text = "分享导出文件", onClick = { onShareExport(result) }, modifier = Modifier.fillMaxWidth())
         }
-        exportErrorMessage?.let {
-            Column(
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(
-                    "导出失败",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
+    }
+    exportErrorMessage?.let { message ->
+        Column(
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                "导出失败",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            Text(
+                "确认存储空间后可以再次点击导出 JSON 重试。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -477,6 +526,7 @@ private fun DataMaintenanceActions(
                         .heightIn(min = 52.dp),
                 enabled = !dataMaintenance.inProgress,
                 onClick = onRepair,
+                shape = VocabControlShape,
             ) {
                 Text("修复学习数据缓存")
             }
@@ -574,13 +624,22 @@ private fun DataMaintenanceError(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
         )
+        Text(
+            if (hasPreviousResult) {
+                "上次结果已保留，可以再次点击检查或修复重试。"
+            } else {
+                "可以再次点击检查学习数据重试。"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
 @Composable
 private fun DataMaintenanceUiState.borderColor() =
     if (errorMessage != null || (report?.issueCount ?: 0) > 0) {
-        MaterialTheme.colorScheme.error.copy(alpha = 0.24f)
+        vocabErrorBorderColor()
     } else {
         MaterialTheme.colorScheme.outline
     }
@@ -679,7 +738,7 @@ private fun StepperRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-        IconButton(modifier = Modifier.heightIn(min = 44.dp), onClick = onDecrease) {
+        IconButton(modifier = Modifier.heightIn(min = 48.dp), onClick = onDecrease) {
             Icon(Icons.Outlined.Remove, contentDescription = "$label 减少")
         }
         Text(
@@ -689,7 +748,7 @@ private fun StepperRow(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
         )
-        IconButton(modifier = Modifier.heightIn(min = 44.dp), onClick = onIncrease) {
+        IconButton(modifier = Modifier.heightIn(min = 48.dp), onClick = onIncrease) {
             Icon(Icons.Outlined.Add, contentDescription = "$label 增加")
         }
     }

@@ -9,14 +9,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -24,10 +23,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -39,16 +38,21 @@ import com.zzz.androidvocab.core.designsystem.SectionTitle
 import com.zzz.androidvocab.core.designsystem.VocabCard
 import com.zzz.androidvocab.core.designsystem.VocabControlShape
 import com.zzz.androidvocab.core.designsystem.VocabEmptyState
+import com.zzz.androidvocab.core.designsystem.VocabFilterChip
+import com.zzz.androidvocab.core.designsystem.VocabInlineError
+import com.zzz.androidvocab.core.designsystem.VocabLoadingCard
 import com.zzz.androidvocab.core.designsystem.VocabPageHeader
 import com.zzz.androidvocab.core.designsystem.VocabPill
 import com.zzz.androidvocab.core.designsystem.VocabProgressBar
 import com.zzz.androidvocab.core.designsystem.VocabScreen
 import com.zzz.androidvocab.core.designsystem.WarmHeroCard
+import com.zzz.androidvocab.core.designsystem.vocabWholePercent
 import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.BookProgress
 import com.zzz.androidvocab.core.model.WordDetail
 import com.zzz.androidvocab.core.model.WordEntry
 import com.zzz.androidvocab.core.model.WordStatusFilter
+import com.zzz.androidvocab.core.model.effectiveSelectedBookCodes
 
 @Composable
 fun WordbookRoute(viewModel: WordbookViewModel = hiltViewModel()) {
@@ -60,6 +64,7 @@ fun WordbookRoute(viewModel: WordbookViewModel = hiltViewModel()) {
         onToggleBook = viewModel::toggleBook,
         onSelectWord = viewModel::selectWord,
         onClearSelectedWord = viewModel::clearSelectedWord,
+        onLoadMore = viewModel::loadMore,
     )
 }
 
@@ -72,6 +77,7 @@ fun WordbookScreen(
     onToggleBook: (BookCode) -> Unit,
     onSelectWord: (String) -> Unit,
     onClearSelectedWord: () -> Unit,
+    onLoadMore: () -> Unit,
 ) {
     VocabScreen {
         VocabPageHeader(
@@ -84,6 +90,7 @@ fun WordbookScreen(
         }
         BookSelectorCard(
             selectedBooks = uiState.settings.selectedBooks,
+            errorMessage = uiState.bookSelectionErrorMessage,
             onToggleBook = onToggleBook,
         )
         StatusFilterCard(
@@ -104,30 +111,31 @@ fun WordbookScreen(
         }
         WordsCard(
             words = uiState.words,
+            displayedWords = uiState.displayedWords,
+            hasMoreWords = uiState.hasMoreWords,
             query = uiState.query,
             statusFilter = uiState.statusFilter,
             onQueryChange = onQueryChange,
             onStatusFilterChange = onStatusFilterChange,
             onSelectWord = onSelectWord,
+            onLoadMore = onLoadMore,
         )
     }
 }
 
 @Composable
 private fun WordbookLoadingCard() {
-    VocabCard {
-        VocabEmptyState(
-            title = "正在加载词书",
-            body = "正在读取本地词库、学习范围和词条状态。",
-        )
-        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-    }
+    VocabLoadingCard(
+        title = "正在加载词书",
+        body = "正在读取本地词库、学习范围和词条状态。",
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BookSelectorCard(
     selectedBooks: Set<BookCode>,
+    errorMessage: String?,
     onToggleBook: (BookCode) -> Unit,
 ) {
     VocabCard(elevated = false) {
@@ -137,18 +145,10 @@ private fun BookSelectorCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             BookCode.entries.forEach { book ->
-                FilterChip(
+                VocabFilterChip(
+                    text = book.displayName,
                     selected = book in selectedBooks,
                     onClick = { onToggleBook(book) },
-                    label = { Text(book.displayName) },
-                    shape = VocabControlShape,
-                    colors =
-                        FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
                 )
             }
         }
@@ -157,6 +157,9 @@ private fun BookSelectorCard(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        errorMessage?.let {
+            VocabInlineError(it)
+        }
     }
 }
 
@@ -176,18 +179,10 @@ private fun StatusFilterCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             WordStatusFilter.entries.forEach { filter ->
-                FilterChip(
+                VocabFilterChip(
+                    text = filter.displayName,
                     selected = statusFilter == filter,
                     onClick = { onStatusFilterChange(filter) },
-                    label = { Text(filter.displayName) },
-                    shape = VocabControlShape,
-                    colors =
-                        FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
                 )
             }
         }
@@ -230,24 +225,19 @@ private fun StatusFilterCard(
 @Composable
 private fun WordsCard(
     words: List<WordEntry>,
+    displayedWords: List<WordEntry>,
+    hasMoreWords: Boolean,
     query: String,
     statusFilter: WordStatusFilter,
     onQueryChange: (String) -> Unit,
     onStatusFilterChange: (WordStatusFilter) -> Unit,
     onSelectWord: (String) -> Unit,
+    onLoadMore: () -> Unit,
 ) {
     VocabCard(elevated = false) {
-        val shownWords = words.take(WORD_RESULT_PREVIEW_LIMIT)
         val hasActiveFilter = query.isNotBlank() || statusFilter != WordStatusFilter.All
-        SectionTitle("词条", detail = "${shownWords.size}/${words.size} 个结果")
-        resultLimitHint(visibleCount = shownWords.size, totalCount = words.size)?.let { hint ->
-            Text(
-                hint,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (shownWords.isEmpty()) {
+        SectionTitle("词条", detail = "${displayedWords.size}/${words.size} 个结果")
+        if (displayedWords.isEmpty()) {
             VocabEmptyState(
                 title = if (hasActiveFilter) "没有匹配词条" else "暂无词条",
                 body =
@@ -273,26 +263,29 @@ private fun WordsCard(
                     },
             )
         } else {
-            shownWords.forEach { word ->
-                key(word.id) {
+            LazyColumn(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = wordListMaxHeight),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
+            ) {
+                items(displayedWords, key = { word -> word.id }) { word ->
                     WordRow(word = word, onClick = { onSelectWord(word.id) })
+                }
+                if (hasMoreWords) {
+                    item {
+                        SecondaryAction(
+                            text = "加载更多",
+                            onClick = onLoadMore,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
         }
     }
 }
-
-private fun resultLimitHint(
-    visibleCount: Int,
-    totalCount: Int,
-): String? =
-    if (totalCount > visibleCount) {
-        "仅显示前 $visibleCount 条，共 $totalCount 条；继续输入可缩小范围。"
-    } else {
-        null
-    }
-
-private const val WORD_RESULT_PREVIEW_LIMIT = 30
 
 @Composable
 private fun BookProgressListCard(progressItems: List<BookProgress>) {
@@ -312,6 +305,7 @@ private fun BookProgressRow(progress: BookProgress) {
         } else {
             progress.learnedCount.toFloat() / progress.totalCount.toFloat()
         }
+    val progressPercent = vocabWholePercent(fraction)
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -333,9 +327,12 @@ private fun BookProgressRow(progress: BookProgress) {
             }
             VocabPill("待复习 ${progress.dueCount}")
         }
-        VocabProgressBar(progress = fraction)
+        VocabProgressBar(
+            progress = fraction,
+            semanticDescription = "${progress.bookCode.displayName} 词书学习进度 $progressPercent%",
+        )
         Text(
-            "掌握 ${progress.masteredCount} · 进度 ${(fraction * 100).toInt()}%",
+            "掌握 ${progress.masteredCount} · 进度 $progressPercent%",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -351,7 +348,7 @@ private fun WordRow(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onClick)
+                .wordDetailClickTarget(onClick)
                 .heightIn(min = 52.dp)
                 .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -376,6 +373,13 @@ private fun WordRow(
         }
     }
 }
+
+private fun Modifier.wordDetailClickTarget(onClick: () -> Unit): Modifier =
+    clickable(
+        onClickLabel = "查看词条",
+        role = Role.Button,
+        onClick = onClick,
+    )
 
 @Composable
 private fun WordDetailCard(
@@ -426,9 +430,10 @@ private fun wordbookScopeText(
     detail: WordDetail,
     selectedBooks: Set<BookCode>,
 ): String? {
-    val allBooks = detail.memberships.map { it.bookCode }.distinct()
+    val membershipBooks = detail.memberships.map { it.bookCode }.toSet()
+    val allBooks = BookCode.entries.filter { it in membershipBooks }
     if (allBooks.isEmpty()) return null
-    val effectiveSelectedBooks = selectedBooks.ifEmpty { BookCode.entries.toSet() }
+    val effectiveSelectedBooks = selectedBooks.effectiveSelectedBookCodes().toSet()
     val inScope = allBooks.filter { it in effectiveSelectedBooks }
     val outOfScope = allBooks.filterNot { it in effectiveSelectedBooks }
     return listOfNotNull(
@@ -442,6 +447,8 @@ private fun List<BookCode>.joinToStringText(prefix: String): String =
         separator = " / ",
         prefix = "$prefix ",
     ) { it.displayName }
+
+private val wordListMaxHeight = 420.dp
 
 @Composable
 private fun WordDetailHeader(

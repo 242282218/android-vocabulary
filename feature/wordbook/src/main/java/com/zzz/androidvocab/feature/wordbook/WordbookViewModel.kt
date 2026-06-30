@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -65,18 +67,27 @@ class WordbookViewModel
             run {
                 val settingsFlow = observeSettingsUseCase()
                 val filterFlow = combine(query, statusFilter) { rawQuery, filter -> rawQuery to filter }
-                val wordsFlow =
-                    combine(
-                        settingsFlow,
-                        query.debounce(QUERY_DEBOUNCE_MS),
-                        statusFilter,
-                    ) { settings, debouncedQuery, filter ->
-                        SearchRequest(
-                            query = debouncedQuery,
+                val searchCriteriaFlow =
+                    combine(settingsFlow, statusFilter) { settings, filter ->
+                        SearchCriteria(
                             bookCodes = settings.selectedBooks,
                             statusFilter = filter,
                         )
                     }.distinctUntilChanged()
+                val wordsFlow =
+                    searchCriteriaFlow
+                        .flatMapLatest { criteria ->
+                            query
+                                .debounce(QUERY_DEBOUNCE_MS)
+                                .onStart { emit(query.value) }
+                                .map { debouncedQuery ->
+                                    SearchRequest(
+                                        query = debouncedQuery,
+                                        bookCodes = criteria.bookCodes,
+                                        statusFilter = criteria.statusFilter,
+                                    )
+                                }
+                        }.distinctUntilChanged()
                         .flatMapLatest { request ->
                             searchWordsUseCase(request.query, request.bookCodes, request.statusFilter)
                         }
@@ -92,13 +103,13 @@ class WordbookViewModel
                         bookSelectionErrorMessage,
                         displayedCount,
                     ) { filterState, words, detail, bookSelectionError, count ->
-                        capDisplayedCount(words.size)
-                        val displayed = words.take(count)
+                        val safeCount = count.coerceIn(0, words.size)
+                        val displayed = words.take(safeCount)
                         WordbookContentState(
                             filterState = filterState,
                             words = words,
                             displayedWords = displayed,
-                            hasMoreWords = words.size > count,
+                            hasMoreWords = words.size > safeCount,
                             detail = detail,
                             bookSelectionErrorMessage = bookSelectionError,
                         )
@@ -145,16 +156,6 @@ class WordbookViewModel
             displayedCount.value += PAGE_SIZE
         }
 
-        /**
-         * Called internally after each combine emission to cap pagination
-         * so [displayedCount] never exceeds the actual word list size.
-         */
-        private fun capDisplayedCount(wordsSize: Int) {
-            if (displayedCount.value > wordsSize) {
-                displayedCount.value = wordsSize
-            }
-        }
-
         private fun resetSelectionAndPagination() {
             selectedWordId.value = null
             displayedCount.value = INITIAL_DISPLAY_COUNT
@@ -185,6 +186,11 @@ class WordbookViewModel
 
         private data class SearchRequest(
             val query: String,
+            val bookCodes: Set<BookCode>,
+            val statusFilter: WordStatusFilter,
+        )
+
+        private data class SearchCriteria(
             val bookCodes: Set<BookCode>,
             val statusFilter: WordStatusFilter,
         )

@@ -17,6 +17,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -46,6 +48,7 @@ class TodayViewModel
         private val isImporting = MutableStateFlow(false)
         private val importError = MutableStateFlow<String?>(null)
         private val importAttempted = AtomicBoolean(false)
+        private val submittedCardQueueState = observeSubmittedCardQueueStateUseCase()
 
         val uiState =
             combine(
@@ -53,31 +56,39 @@ class TodayViewModel
                 getReviewLoadUseCase(REVIEW_LOAD_DAYS),
                 isImporting,
                 importError,
-                observeSubmittedCardQueueStateUseCase(),
+                submittedCardQueueState,
             ) { overview, reviewLoad, importing, error, submittedCardQueueState ->
                 val submittedCardId = submittedCardQueueState.submittedCardId
                 val adjustedOverview = overview.hideSubmittedCard(submittedCardId)
-                if (submittedCardId != null && !submittedCardQueueState.isStillInRawQueue) {
-                    reviewSessionCoordinator.clearSubmittedCard(submittedCardId)
-                }
-                TodayUiState(
-                    isLoading = false,
-                    isImporting = importing,
-                    overview = adjustedOverview,
-                    reviewLoad = reviewLoad,
-                    isRefreshingReviewSession =
-                        submittedCardId != null &&
-                            overview.queue.containsCard(submittedCardId) &&
-                            adjustedOverview.queue.totalCount == 0,
-                    errorMessage = error,
+                TodayContentState(
+                    uiState =
+                        TodayUiState(
+                            isLoading = false,
+                            isImporting = importing,
+                            overview = adjustedOverview,
+                            reviewLoad = reviewLoad,
+                            isRefreshingReviewSession =
+                                submittedCardId != null &&
+                                    overview.queue.containsCard(submittedCardId) &&
+                                    adjustedOverview.queue.totalCount == 0,
+                            errorMessage = error,
+                        ),
+                    submittedCardIdToClear =
+                        submittedCardId.takeIf {
+                            it != null && !submittedCardQueueState.isStillInRawQueue
+                        },
                 )
-            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TodayUiState())
+            }.onEach { content ->
+                content.submittedCardIdToClear?.let(reviewSessionCoordinator::clearSubmittedCard)
+            }.map { content -> content.uiState }
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TodayUiState())
 
         init {
             startImport()
         }
 
         fun retryImport() {
+            if (isImporting.value) return
             importAttempted.set(false)
             startImport()
         }
@@ -85,6 +96,7 @@ class TodayViewModel
         private fun startImport() {
             if (!importAttempted.compareAndSet(false, true)) return
             importError.value = null
+            isImporting.value = true
             viewModelScope.launch {
                 importVocabulary()
             }
@@ -104,6 +116,11 @@ class TodayViewModel
             }
         }
     }
+
+private data class TodayContentState(
+    val uiState: TodayUiState,
+    val submittedCardIdToClear: String?,
+)
 
 private const val REVIEW_LOAD_DAYS = 14
 

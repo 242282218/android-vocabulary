@@ -104,7 +104,7 @@ class DataStoreSettingsRepository internal constructor(
         return parsed.ifEmpty { setOf(BookCode.CET4) }
     }
 
-    private fun Set<BookCode>.toPreferenceValue(): String = joinToString(",") { it.name }
+    private fun Set<BookCode>.toPreferenceValue(): String = sortedBy { it.ordinal }.joinToString(",") { it.name }
 
     private fun Double.normalizeTargetRetention(): Double =
         if (isNaN()) DEFAULT_TARGET_RETENTION else coerceIn(MIN_TARGET_RETENTION, MAX_TARGET_RETENTION)

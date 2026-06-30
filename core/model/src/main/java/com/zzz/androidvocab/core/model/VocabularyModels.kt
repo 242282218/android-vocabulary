@@ -14,6 +14,12 @@ enum class BookCode(
 
 fun String.toBookCodeOrNull(): BookCode? = BookCode.entries.firstOrNull { it.name == this }
 
+fun Set<BookCode>.effectiveSelectedBookCodes(): List<BookCode> =
+    ifEmpty { BookCode.entries.toSet() }
+        .sortedBy { it.ordinal }
+
+fun Set<BookCode>.effectiveSelectedBookCodeNames(): List<String> = effectiveSelectedBookCodes().map { it.name }
+
 data class WordEntry(
     val id: String,
     val word: String,

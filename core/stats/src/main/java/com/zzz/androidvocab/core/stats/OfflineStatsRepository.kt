@@ -16,6 +16,7 @@ import com.zzz.androidvocab.core.model.DifficultWord
 import com.zzz.androidvocab.core.model.RetentionStats
 import com.zzz.androidvocab.core.model.StreakStats
 import com.zzz.androidvocab.core.model.TodayStats
+import com.zzz.androidvocab.core.model.effectiveSelectedBookCodeNames
 import com.zzz.androidvocab.core.model.toBookCodeOrNull
 import com.zzz.androidvocab.core.scheduler.ReviewScheduler
 import dagger.Binds
@@ -48,7 +49,7 @@ class OfflineStatsRepository
             now: Instant,
             selectedBooks: Set<BookCode>,
         ): Flow<TodayStats> {
-            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
+            val bookCodes = selectedBooks.effectiveSelectedBookCodeNames()
             val baseFlow =
                 statsDao.observeDailyStatsFromLogs(localDay.toString(), bookCodes).map { stats ->
                     TodayStatsBase(
@@ -117,7 +118,7 @@ class OfflineStatsRepository
         ): Flow<Long?> {
             val safeDays = days.coerceAtLeast(1)
             val startDay = today.minusDays((safeDays - 1).toLong())
-            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
+            val bookCodes = selectedBooks.effectiveSelectedBookCodeNames()
             return statsDao
                 .observeAverageDurationMs(startDay.toString(), today.toString(), bookCodes)
                 .map { average -> average?.roundToLong()?.takeIf { it > 0L } }
@@ -148,7 +149,7 @@ class OfflineStatsRepository
             selectedBooks: Set<BookCode>,
         ): Flow<List<DailyReviewLoad>> {
             if (days <= 0) return flowOf(emptyList())
-            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
+            val bookCodes = selectedBooks.effectiveSelectedBookCodeNames()
             val zoneId = clockProvider.zoneId()
             val startDay = LocalDate.ofInstant(now, zoneId)
             val end = startDay.plusDays(days.toLong()).atStartOfDay(zoneId).toInstant()
@@ -176,7 +177,7 @@ class OfflineStatsRepository
         ): Flow<List<DailyActivity>> {
             if (days <= 0) return flowOf(emptyList())
             val startDay = today.minusDays((days - 1).coerceAtLeast(0).toLong())
-            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
+            val bookCodes = selectedBooks.effectiveSelectedBookCodeNames()
             return statsDao.observeDailyActivityRows(startDay.toString(), today.toString(), bookCodes).map { rows ->
                 val grouped = rows.associate { it.localDay to it.reviewCount }
                 (0 until days).map { offset ->
@@ -194,7 +195,7 @@ class OfflineStatsRepository
             val from =
                 localLookbackStart(now, days, clockProvider.zoneId())
                     ?: return flowOf(RetentionStats(0.0, 0.0, 0.0))
-            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
+            val bookCodes = selectedBooks.effectiveSelectedBookCodeNames()
             return combine(
                 statsDao.observeReviewedCards(from, bookCodes),
                 settingsRepository.settings,
@@ -217,7 +218,7 @@ class OfflineStatsRepository
             today: LocalDate,
             selectedBooks: Set<BookCode>,
         ): Flow<StreakStats> {
-            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
+            val bookCodes = selectedBooks.effectiveSelectedBookCodeNames()
             return statsDao.observeActiveDays(bookCodes).map { days ->
                 val active = days.toSet()
                 StreakStats(
@@ -234,7 +235,7 @@ class OfflineStatsRepository
             selectedBooks: Set<BookCode>,
         ): Flow<List<DifficultWord>> {
             val from = localLookbackStart(now, days, clockProvider.zoneId()) ?: return flowOf(emptyList())
-            val bookCodes = selectedBooks.ifEmpty { BookCode.entries.toSet() }.map { it.name }
+            val bookCodes = selectedBooks.effectiveSelectedBookCodeNames()
             return statsDao.observeDifficultWordRows(from, bookCodes).map { rows ->
                 if (rows.isEmpty()) return@map emptyList()
                 val words = statsDao.getWordsByIds(rows.map { it.wordId }).associateBy { it.id }

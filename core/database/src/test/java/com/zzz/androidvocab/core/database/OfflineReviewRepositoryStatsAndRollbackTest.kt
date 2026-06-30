@@ -271,7 +271,7 @@ class OfflineReviewRepositoryStatsAndRollbackTest {
         }
 
     @Test
-    fun submitFeedbackInsertsLogBeforeSchedulingAndFinalizesItBeforeReviewCard() =
+    fun submitFeedbackInsertsFinalLogBeforeReviewCard() =
         runTest {
             seedWord(database, clock)
             val id = cardId(WORD_ID, BookCode.CET4.name)
@@ -284,13 +284,14 @@ class OfflineReviewRepositoryStatsAndRollbackTest {
                     statsDao = database.statsDao(),
                     scheduler = OperationRecordingScheduler(scheduler, operations),
                     clockProvider = clock,
+                    integrityService = newReviewDataIntegrityService(database, scheduler, clock),
                 )
 
             recordingRepository.submitFeedback(command(id, clock.now(), ReviewRating.Good, 0.9))
 
             assertEquals(
-                listOf("insertLog", "schedule", "updateLog", "upsertCard"),
-                operations.filter { it in setOf("insertLog", "schedule", "updateLog", "upsertCard") },
+                listOf("schedule", "insertLog", "upsertCard"),
+                operations.filter { it in setOf("insertLog", "schedule", "upsertCard") },
             )
             val storedLog = database.reviewDao().getLogs(id).single()
             assertEquals("test", storedLog.algorithmVersion)
@@ -310,38 +311,7 @@ class OfflineReviewRepositoryStatsAndRollbackTest {
                     statsDao = database.statsDao(),
                     scheduler = scheduler,
                     clockProvider = clock,
-                )
-
-            val error =
-                runCatching {
-                    failingRepository.submitFeedback(command(id, clock.now(), ReviewRating.Good, 0.9))
-                }.exceptionOrNull()
-
-            assertTrue((error as AppException).error is AppError.DatabaseWriteFailed)
-            assertEquals(emptyList<ReviewRating>(), database.reviewDao().getLogs(id).map { it.toModel().rating })
-            assertEquals(null, database.reviewDao().getCard(id))
-            assertEquals(
-                null,
-                database
-                    .exportDao()
-                    .dailyStatsFromLogs()
-                    .find { it.localDay == "2026-05-16" }
-                    ?.completedCount,
-            )
-        }
-
-    @Test
-    fun logFinalizeFailureRollsBackInsertedReviewLogAndStats() =
-        runTest {
-            seedWord(database, clock)
-            val id = cardId(WORD_ID, BookCode.CET4.name)
-            val failingRepository =
-                OfflineReviewRepository(
-                    database = database,
-                    reviewDao = FailingUpdateLogReviewDao(database.reviewDao()),
-                    statsDao = database.statsDao(),
-                    scheduler = scheduler,
-                    clockProvider = clock,
+                    integrityService = newReviewDataIntegrityService(database, scheduler, clock),
                 )
 
             val error =

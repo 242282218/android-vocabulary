@@ -24,6 +24,7 @@ function Read-KeyValueMetadata {
     }
 
     $values = @{}
+    $duplicateKeys = @()
     foreach ($line in Get-Content -LiteralPath $Path) {
         if ([string]::IsNullOrWhiteSpace($line) -or $line -notmatch '=') {
             continue
@@ -31,9 +32,33 @@ function Read-KeyValueMetadata {
         $separatorIndex = $line.IndexOf('=')
         $key = $line.Substring(0, $separatorIndex)
         $value = $line.Substring($separatorIndex + 1)
+        if ($values.ContainsKey($key)) {
+            $duplicateKeys += $key
+        }
         $values[$key] = $value
     }
+    if ($duplicateKeys.Count -gt 0) {
+        $values['__duplicateKeys'] = @($duplicateKeys | Select-Object -Unique) -join ','
+    }
     return $values
+}
+
+function Get-MetadataDuplicateKeys {
+    param([hashtable]$Metadata)
+
+    if ($null -eq $Metadata -or -not $Metadata.ContainsKey('__duplicateKeys')) {
+        return '<none>'
+    }
+    if ([string]::IsNullOrWhiteSpace($Metadata['__duplicateKeys'])) {
+        return '<none>'
+    }
+    return $Metadata['__duplicateKeys']
+}
+
+function Test-MetadataHasUniqueKeys {
+    param([hashtable]$Metadata)
+
+    return $null -ne $Metadata -and -not $Metadata.ContainsKey('__duplicateKeys')
 }
 
 function Add-RequirementResult {
@@ -497,6 +522,10 @@ $releaseArtifacts = Read-KeyValueMetadata $releaseArtifactsPath
 $apkSmoke = Read-KeyValueMetadata $apkSmokePath
 $deviceVerification = Read-KeyValueMetadata $deviceVerificationPath
 $githubActions = Read-KeyValueMetadata $GitHubActionsEvidencePath
+$releaseArtifactsDuplicateKeys = Get-MetadataDuplicateKeys $releaseArtifacts
+$apkSmokeDuplicateKeys = Get-MetadataDuplicateKeys $apkSmoke
+$deviceVerificationDuplicateKeys = Get-MetadataDuplicateKeys $deviceVerification
+$githubActionsDuplicateKeys = Get-MetadataDuplicateKeys $githubActions
 $deviceBundleSmokeMetadataPath = Get-DeviceBundleSmokeMetadataPath `
     -DeviceVerificationMetadataPath $deviceVerificationPath `
     -DeviceVerificationMetadata $deviceVerification
@@ -535,6 +564,7 @@ $deviceBundleSmokeArchiveMetadata =
         $deviceBundleSmokeArchivePath
     }
 $deviceBundleSmokeArchive = Read-KeyValueMetadata $deviceBundleSmokeArchivePath
+$deviceBundleSmokeArchiveDuplicateKeys = Get-MetadataDuplicateKeys $deviceBundleSmokeArchive
 $evidenceArchives = Format-ReadinessEvidenceArchiveSummary `
     -ReleaseArtifactsArchive $releaseArtifactsEvidenceArchive `
     -ReleaseArtifactsArchiveSha256 $releaseArtifactsEvidenceArchiveSha256 `
@@ -568,6 +598,7 @@ $releaseArtifactsStaleCurrentVersionArtifacts =
     Get-MetadataValueOrDefault $releaseArtifacts 'staleCurrentVersionArtifacts'
 $releaseArtifactsMetadataRemediation = Get-MetadataValueOrDefault $releaseArtifacts 'releaseArtifactsRemediation' '<missing>'
 $releaseArtifactsReady =
+    (Test-MetadataHasUniqueKeys $releaseArtifacts) -and
     (Test-MetadataValue $releaseArtifacts 'runStatus' 'completed') -and
     (Test-MetadataValue $releaseArtifacts 'versionName' $versionName) -and
     (Test-MetadataValue $releaseArtifacts 'versionCode' $versionCode) -and
@@ -598,10 +629,11 @@ $requirements = Add-RequirementResult `
     -Results $requirements `
     -Name 'releaseArtifacts' `
     -Passed $releaseArtifactsReady `
-    -Evidence "path=$releaseArtifactsPath;archive=$releaseArtifactsEvidenceArchive;archiveSha256=$releaseArtifactsEvidenceArchiveSha256;apkSha256=$releaseArtifactsApkSha256;bundleSha256=$releaseArtifactsBundleSha256;staleCurrentVersionArtifacts=$releaseArtifactsStaleCurrentVersionArtifacts;remediation=$releaseArtifactsRemediation"
+    -Evidence "path=$releaseArtifactsPath;archive=$releaseArtifactsEvidenceArchive;archiveSha256=$releaseArtifactsEvidenceArchiveSha256;duplicateKeys=$releaseArtifactsDuplicateKeys;apkSha256=$releaseArtifactsApkSha256;bundleSha256=$releaseArtifactsBundleSha256;staleCurrentVersionArtifacts=$releaseArtifactsStaleCurrentVersionArtifacts;remediation=$releaseArtifactsRemediation"
 
 $apkSmokeSha256 = Get-MetadataValueOrDefault $apkSmoke 'apkSha256'
 $apkSmokeReady =
+    (Test-MetadataHasUniqueKeys $apkSmoke) -and
     (Test-MetadataValue $apkSmoke 'runStatus' 'completed') -and
     (Test-MetadataValue $apkSmoke 'versionName' $versionName) -and
     (Test-MetadataValue $apkSmoke 'versionCode' $versionCode) -and
@@ -619,7 +651,7 @@ $requirements = Add-RequirementResult `
     -Results $requirements `
     -Name 'releaseApkSmoke' `
     -Passed $apkSmokeReady `
-    -Evidence "path=$apkSmokePath;archive=$apkSmokeEvidenceArchive;archiveSha256=$apkSmokeEvidenceArchiveSha256;apkSha256=$apkSmokeSha256;remediation=$apkSmokeRemediation"
+    -Evidence "path=$apkSmokePath;archive=$apkSmokeEvidenceArchive;archiveSha256=$apkSmokeEvidenceArchiveSha256;duplicateKeys=$apkSmokeDuplicateKeys;apkSha256=$apkSmokeSha256;remediation=$apkSmokeRemediation"
 
 $deviceBundleSha256 = Get-MetadataValueOrDefault $deviceVerification 'bundleSha256'
 $deviceBundleSmokeSha256 = Get-MetadataValueOrDefault $deviceVerification 'bundleSmokeBundleSha256'
@@ -630,6 +662,7 @@ $deviceBundleSmokeArchiveBundlePathMatchesCurrentVersionedName =
 $deviceBundleSmokeArchiveReleaseReady = Get-MetadataValueOrDefault $deviceBundleSmokeArchive 'bundleSmokeReleaseReady'
 $deviceBundleSmokeArchiveApkSetSigning = Get-MetadataValueOrDefault $deviceBundleSmokeArchive 'apkSetSigning'
 $deviceVerificationReady =
+    (Test-MetadataHasUniqueKeys $deviceVerification) -and
     (Test-MetadataValue $deviceVerification 'runStatus' 'completed') -and
     (Test-MetadataValue $deviceVerification 'versionName' $versionName) -and
     (Test-MetadataValue $deviceVerification 'versionCode' $versionCode) -and
@@ -646,6 +679,7 @@ $deviceVerificationReady =
     $deviceBundleSmokeSha256 -eq $releaseArtifactsBundleSha256 -and
     $deviceBundleSmokeSha256 -eq $deviceBundleSha256
 $deviceBundleSmokeArchiveReady =
+    (Test-MetadataHasUniqueKeys $deviceBundleSmokeArchive) -and
     (Test-MetadataValue $deviceBundleSmokeArchive 'runStatus' 'completed') -and
     (Test-MetadataValue $deviceBundleSmokeArchive 'versionName' $versionName) -and
     (Test-MetadataValue $deviceBundleSmokeArchive 'versionCode' $versionCode) -and
@@ -673,12 +707,12 @@ $requirements = Add-RequirementResult `
     -Results $requirements `
     -Name 'deviceAabVerification' `
     -Passed $deviceVerificationReady `
-    -Evidence "path=$deviceEvidence;archive=$deviceVerificationEvidenceArchive;archiveSha256=$deviceVerificationEvidenceArchiveSha256;bundleSha256=$deviceBundleSha256;bundleSmokeBundleSha256=$deviceBundleSmokeSha256;remediation=$deviceVerificationRemediation"
+    -Evidence "path=$deviceEvidence;archive=$deviceVerificationEvidenceArchive;archiveSha256=$deviceVerificationEvidenceArchiveSha256;duplicateKeys=$deviceVerificationDuplicateKeys;bundleSha256=$deviceBundleSha256;bundleSmokeBundleSha256=$deviceBundleSmokeSha256;remediation=$deviceVerificationRemediation"
 $requirements = Add-RequirementResult `
     -Results $requirements `
     -Name 'deviceBundleSmokeArchive' `
     -Passed $deviceBundleSmokeArchiveReady `
-    -Evidence "path=$deviceBundleSmokeArchiveMetadata;archive=$deviceBundleSmokeEvidenceArchive;archiveSha256=$deviceBundleSmokeEvidenceArchiveSha256;bundleSmokeArchiveBundleSha256=$deviceBundleSmokeArchiveBundleSha256;remediation=$deviceBundleSmokeArchiveRemediation"
+    -Evidence "path=$deviceBundleSmokeArchiveMetadata;archive=$deviceBundleSmokeEvidenceArchive;archiveSha256=$deviceBundleSmokeEvidenceArchiveSha256;duplicateKeys=$deviceBundleSmokeArchiveDuplicateKeys;bundleSmokeArchiveBundleSha256=$deviceBundleSmokeArchiveBundleSha256;remediation=$deviceBundleSmokeArchiveRemediation"
 
 $githubEvidence = if ([string]::IsNullOrWhiteSpace($GitHubActionsEvidencePath)) { '<missing>' } else { $GitHubActionsEvidencePath }
 $requiredGitHubChecks = Get-AndroidVocabularyRequiredGitHubActionsChecks
@@ -692,7 +726,7 @@ $githubRunAttempt = Get-MetadataValueOrDefault $githubActions 'runAttempt'
 $githubRunUrl = Get-MetadataValueOrDefault $githubActions 'runUrl'
 $githubChecks = ConvertTo-ListValue (Get-MetadataValueOrDefault $githubActions 'checks' '')
 $githubActionsReady =
-    $null -ne $githubActions -and
+    (Test-MetadataHasUniqueKeys $githubActions) -and
     $githubWorkflow -eq 'Android' -and
     $githubConclusion -eq 'success' -and
     $githubCommitSha -eq $currentCommitSha -and
@@ -715,7 +749,7 @@ $requirements = Add-RequirementResult `
     -Results $requirements `
     -Name 'githubActionsEvidence' `
     -Passed $githubActionsReady `
-    -Evidence "path=$githubEvidence;archive=$githubActionsEvidenceArchive;archiveSha256=$githubActionsEvidenceArchiveSha256;workflow=$githubWorkflow;conclusion=$githubConclusion;commitSha=$githubCommitSha;serverUrl=$githubServerUrl;repository=$githubRepository;runId=$githubRunId;runAttempt=$githubRunAttempt;remediation=$githubActionsRemediation"
+    -Evidence "path=$githubEvidence;archive=$githubActionsEvidenceArchive;archiveSha256=$githubActionsEvidenceArchiveSha256;duplicateKeys=$githubActionsDuplicateKeys;workflow=$githubWorkflow;conclusion=$githubConclusion;commitSha=$githubCommitSha;serverUrl=$githubServerUrl;repository=$githubRepository;runId=$githubRunId;runAttempt=$githubRunAttempt;remediation=$githubActionsRemediation"
 
 $failedRequirements = @($requirements | Where-Object { $_ -match '=failed\|' })
 $failedRequirementNames = @(
@@ -836,6 +870,7 @@ $metadata = @(
     "releaseArtifactsMetadata=$releaseArtifactsPath",
     "releaseArtifactsEvidenceArchive=$releaseArtifactsEvidenceArchive",
     "releaseArtifactsEvidenceArchiveSha256=$releaseArtifactsEvidenceArchiveSha256",
+    "releaseArtifactsDuplicateKeys=$releaseArtifactsDuplicateKeys",
     "releaseArtifactsRemediation=$releaseArtifactsRemediation",
     "releaseArtifactsStaleCurrentVersionArtifacts=$releaseArtifactsStaleCurrentVersionArtifacts",
     "releaseApk=$releaseApkPath",
@@ -849,6 +884,7 @@ $metadata = @(
     "apkSmokeMetadata=$apkSmokePath",
     "apkSmokeEvidenceArchive=$apkSmokeEvidenceArchive",
     "apkSmokeEvidenceArchiveSha256=$apkSmokeEvidenceArchiveSha256",
+    "apkSmokeDuplicateKeys=$apkSmokeDuplicateKeys",
     "apkSmokeSha256=$apkSmokeSha256",
     "apkSmokeRemediation=$apkSmokeRemediation",
     "deviceVerificationEvidenceMode=$deviceVerificationEvidenceMode",
@@ -856,10 +892,12 @@ $metadata = @(
     "deviceVerificationMetadata=$deviceEvidence",
     "deviceVerificationEvidenceArchive=$deviceVerificationEvidenceArchive",
     "deviceVerificationEvidenceArchiveSha256=$deviceVerificationEvidenceArchiveSha256",
+    "deviceVerificationDuplicateKeys=$deviceVerificationDuplicateKeys",
     "deviceBundleSmokeMetadata=$deviceBundleSmokeMetadata",
     "deviceBundleSmokeEvidenceArchive=$deviceBundleSmokeEvidenceArchive",
     "deviceBundleSmokeEvidenceArchiveSha256=$deviceBundleSmokeEvidenceArchiveSha256",
     "deviceBundleSmokeArchiveMetadata=$deviceBundleSmokeArchiveMetadata",
+    "deviceBundleSmokeArchiveDuplicateKeys=$deviceBundleSmokeArchiveDuplicateKeys",
     "deviceBundleSmokeArchiveRunStatus=$deviceBundleSmokeArchiveRunStatus",
     "deviceBundleSmokeArchiveBundleSha256=$deviceBundleSmokeArchiveBundleSha256",
     "deviceBundleSmokeArchiveBundlePathMatchesCurrentVersionedName=$deviceBundleSmokeArchiveBundlePathMatchesCurrentVersionedName",
@@ -872,6 +910,7 @@ $metadata = @(
     "githubActionsEvidenceMetadata=$githubEvidence",
     "githubActionsEvidenceArchive=$githubActionsEvidenceArchive",
     "githubActionsEvidenceArchiveSha256=$githubActionsEvidenceArchiveSha256",
+    "githubActionsDuplicateKeys=$githubActionsDuplicateKeys",
     "githubActionsWorkflow=$githubWorkflow",
     "githubActionsConclusion=$githubConclusion",
     "githubActionsCommitSha=$githubCommitSha",

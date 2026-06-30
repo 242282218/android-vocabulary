@@ -8,9 +8,6 @@ kotlin {
 
 dependencies {
     implementation(project(":core:model"))
-    implementation(libs.kotlinx.coroutines.android)
-    implementation(javaxInject())
+    implementation(libs.javax.inject)
     testImplementation(libs.junit)
 }
-
-fun javaxInject(): String = "javax.inject:javax.inject:1"

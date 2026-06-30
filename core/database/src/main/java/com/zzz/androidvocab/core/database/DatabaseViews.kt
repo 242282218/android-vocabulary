@@ -7,15 +7,19 @@ internal const val REVIEW_DAILY_STATS_VIEW_NAME = "review_daily_stats"
 
 internal const val FIRST_REVIEWS_VIEW_NAME = "first_reviews"
 
+internal const val VALID_REVIEW_LOGS_VIEW_NAME = "valid_review_logs"
+
+internal const val WORD_CARD_VIEW_NAME = "word_card_view"
+
 internal const val LOGICAL_REVIEW_CARD_ID_SQL = "l.bookCode || '|' || l.wordId"
 internal const val CANDIDATE_LOGICAL_REVIEW_CARD_MATCH_SQL =
     "candidate.wordId = l.wordId AND candidate.bookCode = l.bookCode"
 
 internal const val FIRST_REVIEWS_VIEW_SQL =
     "SELECT $LOGICAL_REVIEW_CARD_ID_SQL AS cardId, l.id AS firstLogId, l.reviewedAt AS firstReviewedAt " +
-        "FROM valid_review_logs l " +
+        "FROM $VALID_REVIEW_LOGS_VIEW_NAME l " +
         "WHERE l.id = (" +
-        "SELECT candidate.id FROM valid_review_logs candidate " +
+        "SELECT candidate.id FROM $VALID_REVIEW_LOGS_VIEW_NAME candidate " +
         "WHERE $CANDIDATE_LOGICAL_REVIEW_CARD_MATCH_SQL " +
         "ORDER BY candidate.reviewedAt ASC, candidate.id ASC " +
         "LIMIT 1" +
@@ -54,13 +58,13 @@ internal const val REVIEW_DAILY_STATS_VIEW_SQL =
         "SUM(CASE WHEN l.rating = 'easy' THEN 1 ELSE 0 END) AS easyCount, " +
         "COUNT(*) AS completedCount, " +
         "IFNULL(SUM(l.durationMs), 0) AS durationMs " +
-        "FROM valid_review_logs l " +
+        "FROM $VALID_REVIEW_LOGS_VIEW_NAME l " +
         "JOIN $FIRST_REVIEWS_VIEW_NAME f ON f.cardId = ($LOGICAL_REVIEW_CARD_ID_SQL) " +
         "GROUP BY l.localDay" +
         ") daily"
 
 @DatabaseView(
-    viewName = "valid_review_logs",
+    viewName = VALID_REVIEW_LOGS_VIEW_NAME,
     value =
         "SELECT l.* FROM review_logs l " +
             "JOIN wordbook_memberships m ON m.wordId = l.wordId AND m.bookCode = l.bookCode",
@@ -120,7 +124,7 @@ data class ReviewDailyStatsView(
 )
 
 @DatabaseView(
-    viewName = "word_card_view",
+    viewName = WORD_CARD_VIEW_NAME,
     value =
         "SELECT c.id AS cardId, m.wordId, m.bookCode, " +
             "c.state, c.difficulty, c.stability, c.retrievability, " +

@@ -448,6 +448,9 @@ function Test-ReleaseArtifactNaming {
             'gitWorktreeRemediation=',
             '$gitWorktreeClean = $gitWorktreeDirtyCount -eq 0',
             'remediation=$gitWorktreeRemediation',
+            'function Get-MetadataDuplicateKeys',
+            'function Test-MetadataHasUniqueKeys',
+            '''__duplicateKeys''',
             'function Copy-ReadinessEvidenceArtifact',
             'Remove-Item -LiteralPath $destinationPath -Force -ErrorAction SilentlyContinue',
             '$resolvedSourcePath -eq $resolvedDestinationPath',
@@ -483,14 +486,19 @@ function Test-ReleaseArtifactNaming {
             'evidence-github-actions.txt',
             'releaseArtifactsEvidenceArchive=',
             'releaseArtifactsEvidenceArchiveSha256=',
+            'releaseArtifactsDuplicateKeys=',
             'apkSmokeEvidenceArchive=',
             'apkSmokeEvidenceArchiveSha256=',
+            'apkSmokeDuplicateKeys=',
             'deviceVerificationEvidenceArchive=',
             'deviceVerificationEvidenceArchiveSha256=',
+            'deviceVerificationDuplicateKeys=',
             'deviceBundleSmokeEvidenceArchive=',
             'deviceBundleSmokeEvidenceArchiveSha256=',
+            'deviceBundleSmokeArchiveDuplicateKeys=',
             'githubActionsEvidenceArchive=',
             'githubActionsEvidenceArchiveSha256=',
+            'githubActionsDuplicateKeys=',
             'githubActionsEvidenceMetadata=',
             'githubActionsServerUrl=',
             'githubActionsRepository=',
@@ -532,6 +540,7 @@ function Test-ReleaseArtifactNaming {
             'releaseBundleSha256Current=',
             'archive=$releaseArtifactsEvidenceArchive;archiveSha256=$releaseArtifactsEvidenceArchiveSha256',
             'Test-Sha256String $releaseArtifactsApkSha256',
+            'Test-MetadataHasUniqueKeys $releaseArtifacts',
             '$releaseArtifactsApkSha256 -eq $currentReleaseApkSha256',
             'Test-Sha256String $releaseArtifactsBundleSha256',
             '$releaseArtifactsBundleSha256 -eq $currentReleaseBundleSha256',
@@ -539,11 +548,13 @@ function Test-ReleaseArtifactNaming {
             'apkSmokeRemediation=',
             'archive=$apkSmokeEvidenceArchive;archiveSha256=$apkSmokeEvidenceArchiveSha256',
             'Test-Sha256String $apkSmokeSha256',
+            'Test-MetadataHasUniqueKeys $apkSmoke',
             '$apkSmokeSha256 -eq $releaseArtifactsApkSha256',
             'remediation=$apkSmokeRemediation',
             'deviceBundleSha256=',
             'archive=$deviceVerificationEvidenceArchive;archiveSha256=$deviceVerificationEvidenceArchiveSha256',
             'Test-Sha256String $deviceBundleSha256',
+            'Test-MetadataHasUniqueKeys $deviceVerification',
             '$deviceBundleSha256 -eq $releaseArtifactsBundleSha256',
             'deviceBundleSmokeSha256=',
             'Test-MetadataValue $deviceVerification ''bundleSmokeRunMetadata'' ''smoke-release-bundle-run.txt''',
@@ -568,6 +579,7 @@ function Test-ReleaseArtifactNaming {
             'Test-MetadataValue $deviceBundleSmokeArchive ''bundlePathMatchesCurrentVersionedName'' ''True''',
             'Test-MetadataValue $deviceBundleSmokeArchive ''bundleSmokeReleaseReady'' ''True''',
             'Test-MetadataValue $deviceBundleSmokeArchive ''apkSetSigning'' ''release-signing''',
+            'Test-MetadataHasUniqueKeys $deviceBundleSmokeArchive',
             'Test-Sha256String $deviceBundleSmokeArchiveBundleSha256',
             '$deviceBundleSmokeArchiveBundleSha256 -eq $releaseArtifactsBundleSha256',
             '$deviceBundleSmokeArchiveBundleSha256 -eq $deviceBundleSha256',
@@ -576,7 +588,7 @@ function Test-ReleaseArtifactNaming {
             'archive=$deviceBundleSmokeEvidenceArchive;archiveSha256=$deviceBundleSmokeEvidenceArchiveSha256',
             'remediation=$deviceVerificationRemediation',
             'remediation=$deviceBundleSmokeArchiveRemediation',
-            'path=$deviceBundleSmokeArchiveMetadata;archive=$deviceBundleSmokeEvidenceArchive;archiveSha256=$deviceBundleSmokeEvidenceArchiveSha256;bundleSmokeArchiveBundleSha256=',
+            'path=$deviceBundleSmokeArchiveMetadata;archive=$deviceBundleSmokeEvidenceArchive;archiveSha256=$deviceBundleSmokeEvidenceArchiveSha256;duplicateKeys=$deviceBundleSmokeArchiveDuplicateKeys;bundleSmokeArchiveBundleSha256=',
             'githubActionsWorkflow=',
             'githubActionsConclusion=',
             'githubActionsCommitSha=',
@@ -586,6 +598,7 @@ function Test-ReleaseArtifactNaming {
             'githubActionsChecks=',
             'githubActionsRemediation=',
             'githubActionsRequiredChecks=',
+            'Test-MetadataHasUniqueKeys $githubActions',
             '$githubWorkflow -eq ''Android''',
             '$githubConclusion -eq ''success''',
             '$githubCommitSha -eq $currentCommitSha',
@@ -1086,6 +1099,39 @@ function Test-ReleaseReadinessPositiveFixture {
                 'blockerActionSummary=download github-actions-release-evidence for the current HEAD',
                 'githubActionsServerUrl=https://github.com',
                 'githubActionsRepository=zzz/other-repo',
+                'githubActionsEvidence=failed'
+            )) {
+            Assert-ContainsPattern -Lines $metadata -Pattern "^$([regex]::Escape($line))"
+        }
+
+        Write-Utf8NoBomLines -Path $githubEvidencePath -Lines @(
+            'workflow=Android',
+            'conclusion=success',
+            "commitSha=$fakeCommitSha",
+            'serverUrl=https://github.com',
+            'repository=zzz/android-vocab',
+            'runId=123456789',
+            'runAttempt=2',
+            'runUrl=https://github.com/zzz/android-vocab/actions/runs/123456789',
+            'runId=123456789',
+            "checks=$((Get-AndroidVocabularyRequiredGitHubActionsChecks) -join ', ')"
+        )
+        Invoke-ExpectedFailure `
+            -ExpectedPattern 'githubActionsEvidence=failed' `
+            -Command {
+                & (Join-AndroidVocabularyPath $testRoot @('scripts', 'test', 'verify-release-readiness.ps1')) `
+                    -GitHubActionsEvidencePath $githubEvidencePath `
+                    -ReleaseArtifactsEvidencePath $releaseArtifactsPath `
+                    -ApkSmokeEvidencePath $apkSmokePath `
+                    -DeviceVerificationEvidencePath $deviceCompletedPath
+            }
+
+        Assert-UniqueKeyValueMetadata -Path $readinessMetadataPath
+        $metadata = Get-Content -LiteralPath $readinessMetadataPath
+        foreach ($line in @(
+                'runStatus=failed',
+                'failedRequirementNames=githubActionsEvidence',
+                'githubActionsDuplicateKeys=runId',
                 'githubActionsEvidence=failed'
             )) {
             Assert-ContainsPattern -Lines $metadata -Pattern "^$([regex]::Escape($line))"

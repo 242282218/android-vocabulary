@@ -1,3 +1,9 @@
 app/src/main/assets/vocab/*.json text eol=lf
+*.kt text eol=lf
+*.kts text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
 scripts/*.ps1 text eol=lf
 scripts/**/*.ps1 text eol=lf

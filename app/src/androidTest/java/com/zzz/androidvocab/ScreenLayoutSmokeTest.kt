@@ -5,12 +5,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -20,17 +29,25 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import com.zzz.androidvocab.core.designsystem.PrimaryAction
+import com.zzz.androidvocab.core.designsystem.SecondaryAction
 import com.zzz.androidvocab.core.designsystem.SectionTitle
 import com.zzz.androidvocab.core.designsystem.VocabCard
+import com.zzz.androidvocab.core.designsystem.VocabColors
+import com.zzz.androidvocab.core.designsystem.VocabFilterChip
+import com.zzz.androidvocab.core.designsystem.VocabProgressBar
 import com.zzz.androidvocab.core.designsystem.VocabTheme
+import com.zzz.androidvocab.core.designsystem.VocabThemeExtras
 import com.zzz.androidvocab.core.model.AppSettings
 import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.BookProgress
 import com.zzz.androidvocab.core.model.DailyActivity
 import com.zzz.androidvocab.core.model.DailyReviewLoad
 import com.zzz.androidvocab.core.model.DifficultWord
+import com.zzz.androidvocab.core.model.ExportResult
 import com.zzz.androidvocab.core.model.RetentionStats
 import com.zzz.androidvocab.core.model.ReviewCard
 import com.zzz.androidvocab.core.model.ReviewDataIntegrityReport
@@ -88,6 +105,30 @@ class ScreenLayoutSmokeTest(
 
         assertTextExists("今日")
         assertTextExists("开始学习")
+        composeRule.onNodeWithContentDescription("今日完成进度 71%").assertExists()
+    }
+
+    @Test
+    fun todayScreenLabelsEmptySelectedBooksAsAllBooks() {
+        val baseState = fakeTodayUiState()
+        val overview = requireNotNull(baseState.overview)
+        renderInViewport {
+            TodayScreen(
+                uiState =
+                    baseState.copy(
+                        overview =
+                            overview.copy(
+                                stats = overview.stats.copy(completedCount = 4),
+                                selectedBooks = emptyList(),
+                            ),
+                    ),
+                onStartReview = {},
+                onRetryImport = {},
+            )
+        }
+
+        assertTextExists("全部词书")
+        composeRule.onAllNodesWithText("5", useUnmergedTree = true).assertCountEquals(1)
     }
 
     @Test
@@ -103,6 +144,7 @@ class ScreenLayoutSmokeTest(
         assertTextDisplayed("开始学习")
         assertTextDisplayed("词库导入失败")
         assertTextDisplayed("重试导入")
+        composeRule.onAllNodes(assertiveLiveRegionMatcher(), useUnmergedTree = true).assertCountEquals(1)
     }
 
     @Test
@@ -117,6 +159,21 @@ class ScreenLayoutSmokeTest(
 
         assertTextDisplayed("开始学习")
         assertTextDisplayed("正在准备词库")
+    }
+
+    @Test
+    fun todayScreenExplainsMissingOverviewState() {
+        renderInViewport {
+            TodayScreen(
+                uiState = TodayUiState(isLoading = false),
+                onStartReview = {},
+                onRetryImport = {},
+            )
+        }
+
+        assertTextExists("暂无今日队列")
+        assertTextExists("还没有从本地词库生成今日学习队列。可以重新导入词库，完成后会显示今天的新词和复习词。")
+        assertTextDisplayed("重试导入")
     }
 
     @Test
@@ -152,6 +209,84 @@ class ScreenLayoutSmokeTest(
     }
 
     @Test
+    fun reviewScreenExplainsSubmittingFeedbackState() {
+        renderInViewport {
+            ReviewScreen(
+                uiState = fakeReviewUiState().copy(isSubmitting = true),
+                onShowBack = {},
+                onSpeak = {},
+                onSubmit = {},
+            )
+        }
+
+        assertTextDisplayed("正在保存反馈，按钮暂时不可用。")
+        composeRule.onAllNodes(politeLiveRegionMatcher(), useUnmergedTree = true).assertCountEquals(1)
+    }
+
+    @Test
+    fun reviewScreenDisablesSpeechActionWhenTtsIsUnavailable() {
+        renderInViewport {
+            ReviewScreen(
+                uiState = fakeReviewUiState(),
+                onShowBack = {},
+                onSpeak = {},
+                isSpeechReady = mutableStateOf(false),
+                onSubmit = {},
+            )
+        }
+
+        composeRule.onNodeWithContentDescription("发音暂不可用").assertIsNotEnabled()
+        composeRule.onAllNodesWithContentDescription("播放发音").assertCountEquals(0)
+    }
+
+    @Test
+    fun reviewScreenUsesWordCardAsRevealTargetBeforeAnswerIsVisible() {
+        var showBackCount = 0
+        renderInViewport {
+            ReviewScreen(
+                uiState = fakeReviewUiState().copy(isBackVisible = false),
+                onShowBack = { showBackCount += 1 },
+                onSpeak = {},
+                onSubmit = {},
+            )
+        }
+
+        composeRule.onAllNodes(showDefinitionActionMatcher(), useUnmergedTree = true).assertCountEquals(1)
+        composeRule.onNode(showDefinitionActionMatcher(), useUnmergedTree = true).performClick()
+        assertEquals(1, showBackCount)
+    }
+
+    @Test
+    fun reviewScreenRemovesWordCardRevealTargetAfterAnswerIsVisible() {
+        renderInViewport {
+            ReviewScreen(
+                uiState = fakeReviewUiState().copy(isBackVisible = true),
+                onShowBack = {},
+                onSpeak = {},
+                onSubmit = {},
+            )
+        }
+
+        composeRule.onAllNodes(showDefinitionActionMatcher(), useUnmergedTree = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun reviewScreenAnnouncesFeedbackSaveError() {
+        renderInViewport {
+            ReviewScreen(
+                uiState = fakeReviewUiState().copy(errorMessage = "disk full"),
+                onShowBack = {},
+                onSpeak = {},
+                onSubmit = {},
+            )
+        }
+
+        assertTextDisplayed("反馈没有保存，当前卡片已保留。")
+        assertTextExists("可以再次选择下方反馈重试。")
+        composeRule.onAllNodes(assertiveLiveRegionMatcher(), useUnmergedTree = true).assertCountEquals(1)
+    }
+
+    @Test
     fun wordbookScreenRendersInViewport() {
         renderInViewport {
             WordbookScreen(
@@ -161,12 +296,15 @@ class ScreenLayoutSmokeTest(
                 onToggleBook = {},
                 onSelectWord = {},
                 onClearSelectedWord = {},
+                onLoadMore = {},
             )
         }
 
         assertTextExists("至少保留一本词书；再次点选最后一本时会保持当前选择。")
         assertTextExists("搜索单词或释义")
         assertTextExists("ability")
+        composeRule.onNodeWithContentDescription("CET4 词书学习进度 3%").assertExists()
+        composeRule.onNodeWithContentDescription("CET6 词书学习进度 1%").assertExists()
     }
 
     @Test
@@ -179,6 +317,7 @@ class ScreenLayoutSmokeTest(
                 onToggleBook = {},
                 onSelectWord = {},
                 onClearSelectedWord = {},
+                onLoadMore = {},
             )
         }
 
@@ -193,14 +332,17 @@ class ScreenLayoutSmokeTest(
             WordbookScreen(
                 uiState =
                     fakeWordbookUiState(
-                        settings = AppSettings(selectedBooks = setOf(BookCode.CET4)),
+                        settings = AppSettings(selectedBooks = linkedSetOf(BookCode.TOEFL, BookCode.CET4)),
                         selectedWordDetail =
                             fakeWordDetail(
                                 word = word,
                                 memberships =
                                     listOf(
-                                        fakeWordMembership(word.id, BookCode.CET4),
+                                        fakeWordMembership(word.id, BookCode.TOEFL),
+                                        fakeWordMembership(word.id, BookCode.IELTS),
+                                        fakeWordMembership(word.id, BookCode.KAOYAN),
                                         fakeWordMembership(word.id, BookCode.CET6),
+                                        fakeWordMembership(word.id, BookCode.CET4),
                                     ),
                             ),
                     ),
@@ -209,10 +351,37 @@ class ScreenLayoutSmokeTest(
                 onToggleBook = {},
                 onSelectWord = {},
                 onClearSelectedWord = {},
+                onLoadMore = {},
             )
         }
 
-        assertTextExists("当前范围 CET4 · 另收录 CET6")
+        assertTextExists("当前范围 CET4 / TOEFL · 另收录 CET6 / 考研 / IELTS")
+    }
+
+    @Test
+    fun wordbookScreenOmitsScopeWhenDetailHasNoMemberships() {
+        val word = fakeWordEntry("orphan")
+        renderInViewport {
+            WordbookScreen(
+                uiState =
+                    fakeWordbookUiState(
+                        selectedWordDetail =
+                            fakeWordDetail(
+                                word = word,
+                                memberships = emptyList(),
+                            ),
+                    ),
+                onQueryChange = {},
+                onStatusFilterChange = {},
+                onToggleBook = {},
+                onSelectWord = {},
+                onClearSelectedWord = {},
+                onLoadMore = {},
+            )
+        }
+
+        assertTextDoesNotExist("当前范围")
+        assertTextDoesNotExist("另收录")
     }
 
     @Test
@@ -230,11 +399,54 @@ class ScreenLayoutSmokeTest(
                 onToggleBook = { toggledBook = it },
                 onSelectWord = {},
                 onClearSelectedWord = {},
+                onLoadMore = {},
             )
         }
 
         clickNodeWithText(BookCode.CET4.displayName)
         assertEquals(BookCode.CET4, toggledBook)
+    }
+
+    @Test
+    fun wordbookScreenShowsBookSelectionSaveError() {
+        renderInViewport {
+            WordbookScreen(
+                uiState =
+                    fakeWordbookUiState(
+                        bookSelectionErrorMessage = "词书选择保存失败：disk full。当前选择已保留，可以再次点选词书重试。",
+                    ),
+                onQueryChange = {},
+                onStatusFilterChange = {},
+                onToggleBook = {},
+                onSelectWord = {},
+                onClearSelectedWord = {},
+                onLoadMore = {},
+            )
+        }
+
+        assertTextExists("词书选择保存失败：disk full。当前选择已保留，可以再次点选词书重试。")
+    }
+
+    @Test
+    fun wordbookScreenWordRowsExposeDetailAction() {
+        var selectedWordId: String? = null
+        renderInViewport {
+            WordbookScreen(
+                uiState = fakeWordbookUiState(showSelectedWordDetail = false),
+                onQueryChange = {},
+                onStatusFilterChange = {},
+                onToggleBook = {},
+                onSelectWord = { selectedWordId = it },
+                onClearSelectedWord = {},
+                onLoadMore = {},
+            )
+        }
+
+        composeRule.onAllNodes(viewWordDetailActionMatcher(), useUnmergedTree = true).assertCountEquals(2)
+        val firstWordRow = composeRule.onAllNodes(viewWordDetailActionMatcher(), useUnmergedTree = true)[0]
+        firstWordRow.performScrollTo()
+        firstWordRow.performClick()
+        assertEquals("word-abandon", selectedWordId)
     }
 
     @Test
@@ -256,6 +468,7 @@ class ScreenLayoutSmokeTest(
                 onToggleBook = {},
                 onSelectWord = {},
                 onClearSelectedWord = {},
+                onLoadMore = {},
             )
         }
 
@@ -285,6 +498,7 @@ class ScreenLayoutSmokeTest(
                 onToggleBook = {},
                 onSelectWord = {},
                 onClearSelectedWord = {},
+                onLoadMore = {},
             )
         }
 
@@ -303,6 +517,24 @@ class ScreenLayoutSmokeTest(
         assertTextExists("7 天 · 全部词书")
         assertTextExists("未来负载")
         assertTextExists("30 天 · 全部词书")
+        assertTextExists("10.5")
+        composeRule
+            .onNodeWithContentDescription("趋势图，显示 7 天，总复习 28 次，最高单日 7 次。")
+            .assertExists()
+        composeRule
+            .onNodeWithContentDescription("月历热力图，显示 35 天，活跃 31 天，总复习 136 次，最高单日 8 次。")
+            .assertExists()
+        composeRule
+            .onNodeWithContentDescription("复习负载图，显示 30 天，总到期 150 个，最高单日 10 个。")
+            .assertExists()
+        composeRule
+            .onNodeWithContentDescription("掌握分布图，未学 9956 个，学习中 540 个，掌握 320 个，总计 10816 个。")
+            .assertExists()
+        composeRule.onNodeWithContentDescription("CET4 词书学习进度 16%").assertExists()
+        composeRule.onNodeWithContentDescription("TOEFL 词书学习进度 3%").assertExists()
+        composeRule
+            .onNodeWithContentDescription("困难词 fragile，释义 放弃；离弃；停止支持某事，again 2 次，hard 3 次，困难度 10.5。")
+            .assertExists()
     }
 
     @Test
@@ -323,12 +555,58 @@ class ScreenLayoutSmokeTest(
         }
 
         assertTextExists("30 天 · CET4、CET6等5本")
-        assertTextDisplayed("年内最长")
-        assertTextDisplayed("年内活跃")
+        assertTextDisplayed("最长连续")
+        assertTextDisplayed("累计活跃")
         assertTextDisplayed("30天 P50")
         assertTextExists("已学 620/3846")
         assertTextExists("待复习 30")
         assertTextExists("掌握 240")
+    }
+
+    @Test
+    fun statsScreenExplainsEmptyProgressData() {
+        renderInViewport {
+            StatsScreen(fakeStatsUiState().copy(progress = emptyList()))
+        }
+
+        assertTextExists("暂无掌握分布")
+        assertTextExists("当前词书暂无可统计词条。完成词库导入或选择词书后，会显示未学、学习中和掌握占比。")
+        assertTextExists("暂无词书进度")
+        assertTextExists("当前学习范围暂无词书数据。完成词库导入或重新选择词书后，会显示各词书进度。")
+    }
+
+    @Test
+    fun statsScreenExplainsEmptyActivityData() {
+        renderInViewport {
+            StatsScreen(fakeStatsUiState().copy(activity = emptyList()))
+        }
+
+        assertTextExists("暂无趋势")
+        assertTextExists("完成一次复习后会出现近 7 天趋势。")
+        assertTextExists("暂无月历热力图")
+        assertTextExists("完成复习后，这里会按本地日期显示最近 35 天的学习密度。")
+    }
+
+    @Test
+    fun statsScreenDescribesZeroReviewLoadAccurately() {
+        renderInViewport {
+            StatsScreen(fakeStatsUiState().copy(load = fakeReviewLoad(days = 30, dueCount = 0)))
+        }
+
+        composeRule
+            .onNodeWithContentDescription("复习负载图，显示 30 天，总到期 0 个，最高单日 0 个。")
+            .assertExists()
+    }
+
+    @Test
+    fun statsScreenClampsInvalidNegativeReviewLoadForChartSemantics() {
+        renderInViewport {
+            StatsScreen(fakeStatsUiState().copy(load = fakeReviewLoad(days = 30, dueCount = -3)))
+        }
+
+        composeRule
+            .onNodeWithContentDescription("复习负载图，显示 30 天，总到期 0 个，最高单日 0 个。")
+            .assertExists()
     }
 
     @Test
@@ -356,6 +634,8 @@ class ScreenLayoutSmokeTest(
         assertTextExists("需授权")
         assertTextExists("系统通知权限未开启，每日提醒不会显示。")
         assertTextExists("打开通知设置")
+        composeRule.onNodeWithContentDescription("每日提醒").assertExists()
+        composeRule.onNode(stateDescriptionMatcher("已开启"), useUnmergedTree = true).assertExists()
     }
 
     @Test
@@ -409,8 +689,146 @@ class ScreenLayoutSmokeTest(
 
         assertTextExists("已关闭")
         assertTextExists("开启后按 07:30 提醒")
+        composeRule.onNode(stateDescriptionMatcher("已关闭"), useUnmergedTree = true).assertExists()
         composeRule.onAllNodesWithContentDescription("小时 减少").assertCountEquals(0)
         composeRule.onAllNodesWithText("打开通知设置", useUnmergedTree = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun settingsScreenLabelsLearningSliders() {
+        renderInViewport {
+            SettingsScreen(
+                uiState = fakeSettingsUiState(),
+                reminderNotificationState = ReminderNotificationState.Granted,
+                onDailyLimitChange = {},
+                onTargetRetentionChange = {},
+                onThemeChange = {},
+                onReminderChange = {},
+                onReminderTimeChange = { _, _ -> },
+                onOpenNotificationSettings = {},
+                onExport = {},
+                onInspectLearningData = {},
+                onRepairLearningData = {},
+            )
+        }
+
+        composeRule.onNodeWithContentDescription("每日新词上限").assertExists()
+        composeRule.onNode(stateDescriptionMatcher("25 个"), useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithContentDescription("目标保持率").assertExists()
+        composeRule.onNode(stateDescriptionMatcher("90%"), useUnmergedTree = true).assertExists()
+    }
+
+    @Test
+    fun settingsScreenExplainsMissingSourceInfo() {
+        renderInViewport {
+            SettingsScreen(
+                uiState = fakeSettingsUiState().copy(sources = emptyList()),
+                reminderNotificationState = ReminderNotificationState.Granted,
+                onDailyLimitChange = {},
+                onTargetRetentionChange = {},
+                onThemeChange = {},
+                onReminderChange = {},
+                onReminderTimeChange = { _, _ -> },
+                onOpenNotificationSettings = {},
+                onExport = {},
+                onInspectLearningData = {},
+                onRepairLearningData = {},
+            )
+        }
+
+        assertTextExists("暂无来源信息")
+        assertTextExists("词库导入完成后，这里会显示来源、许可证和发布阻断状态。")
+    }
+
+    @Test
+    fun settingsScreenExplainsExportFailureRecovery() {
+        renderInViewport {
+            SettingsScreen(
+                uiState = fakeSettingsUiState().copy(exportErrorMessage = "disk full"),
+                reminderNotificationState = ReminderNotificationState.Granted,
+                onDailyLimitChange = {},
+                onTargetRetentionChange = {},
+                onThemeChange = {},
+                onReminderChange = {},
+                onReminderTimeChange = { _, _ -> },
+                onOpenNotificationSettings = {},
+                onExport = {},
+                onInspectLearningData = {},
+                onRepairLearningData = {},
+            )
+        }
+
+        assertTextExists("导出失败")
+        assertTextExists("确认存储空间后可以再次点击导出 JSON 重试。")
+    }
+
+    @Test
+    fun settingsScreenDescribesExportSuccessAccessibly() {
+        val exportResult =
+            ExportResult(
+                fileName = "android-vocabulary-export-with-a-very-long-name.json",
+                absolutePath = "D:\\exports\\android-vocabulary-export-with-a-very-long-name.json",
+            )
+        val exportDescription =
+            "导出完成，文件 ${exportResult.fileName}，本机路径 ${exportResult.absolutePath}，可通过系统分享保存或发送。"
+        var sharedExportResult: ExportResult? = null
+        renderInViewport {
+            SettingsScreen(
+                uiState = fakeSettingsUiState().copy(exportResult = exportResult),
+                reminderNotificationState = ReminderNotificationState.Granted,
+                onDailyLimitChange = {},
+                onTargetRetentionChange = {},
+                onThemeChange = {},
+                onReminderChange = {},
+                onReminderTimeChange = { _, _ -> },
+                onOpenNotificationSettings = {},
+                onExport = {},
+                onShareExport = { sharedExportResult = it },
+                onInspectLearningData = {},
+                onRepairLearningData = {},
+            )
+        }
+
+        assertTextExists("导出完成")
+        assertTextExists("文件已导出，可通过系统分享保存到其他位置或发送给自己。")
+        assertTextExists("分享导出文件")
+        composeRule.onNodeWithContentDescription(exportDescription).assertExists()
+        clickNodeWithText("分享导出文件")
+        composeRule.runOnIdle {
+            assertEquals(exportResult, sharedExportResult)
+        }
+    }
+
+    @Test
+    fun settingsScreenAnnouncesInlineSettingErrors() {
+        renderInViewport {
+            SettingsScreen(
+                uiState =
+                    fakeSettingsUiState().copy(
+                        learningSettingsErrorMessage = "学习设置保存失败：disk full",
+                        reminderErrorMessage = "提醒设置保存失败：disk full",
+                        themeErrorMessage = "外观设置保存失败：disk full",
+                    ),
+                reminderNotificationState = ReminderNotificationState.Granted,
+                onDailyLimitChange = {},
+                onTargetRetentionChange = {},
+                onThemeChange = {},
+                onReminderChange = {},
+                onReminderTimeChange = { _, _ -> },
+                onOpenNotificationSettings = {},
+                onExport = {},
+                onInspectLearningData = {},
+                onRepairLearningData = {},
+            )
+        }
+
+        assertTextExists("学习设置保存失败：disk full")
+        assertTextExists("提醒设置保存失败：disk full")
+        assertTextExists("外观设置保存失败：disk full")
+        assertTextExists("当前学习设置已保留，可以再次调整后重试。")
+        assertTextExists("当前提醒设置已保留，可以再次开启或调整时间重试。")
+        assertTextExists("当前外观设置已保留，可以再次选择主题重试。")
+        composeRule.onAllNodes(assertiveLiveRegionMatcher(), useUnmergedTree = true).assertCountEquals(3)
     }
 
     @Test
@@ -449,6 +867,39 @@ class ScreenLayoutSmokeTest(
         assertTextExists("结果已保留")
         assertTextExists("本次操作失败")
         assertTextExists("学习数据修复失败：disk full")
+        assertTextExists("上次结果已保留，可以再次点击检查或修复重试。")
+    }
+
+    @Test
+    fun themeModeControlsExtendedDesignColors() {
+        val themeMode = mutableStateOf(ThemeMode.Dark)
+        var heroBackground: Color? = null
+        var errorBackground: Color? = null
+        var heatmapLevel4: Color? = null
+
+        composeRule.setContent {
+            VocabTheme(themeMode = themeMode.value) {
+                val colors = VocabThemeExtras.colors
+                SideEffect {
+                    heroBackground = colors.heroBackground
+                    errorBackground = colors.errorCardBackground
+                    heatmapLevel4 = colors.heatmapLevel4
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        assertEquals(VocabColors.HeroBackgroundDark, heroBackground)
+        assertEquals(VocabColors.ErrorCardBackgroundDark, errorBackground)
+        assertEquals(VocabColors.HeatmapLevel4Dark, heatmapLevel4)
+
+        composeRule.runOnIdle {
+            themeMode.value = ThemeMode.Light
+        }
+        composeRule.waitForIdle()
+        assertEquals(VocabColors.HeroBackground, heroBackground)
+        assertEquals(VocabColors.ErrorCardBackground, errorBackground)
+        assertEquals(VocabColors.HeatmapLevel4, heatmapLevel4)
     }
 
     @Test
@@ -471,6 +922,51 @@ class ScreenLayoutSmokeTest(
             "SectionTitle text bounds should not overlap at ${widthDp}x$heightDp",
             titleBounds.right <= detailBounds.left || detailBounds.top >= titleBounds.bottom,
         )
+    }
+
+    @Test
+    fun progressBarRoundsPercentSemantics() {
+        renderInViewport {
+            VocabProgressBar(progress = 2f / 3f)
+        }
+
+        composeRule.onNodeWithContentDescription("进度 67%").assertExists()
+    }
+
+    @Test
+    fun actionButtonsWrapLongLabelsInNarrowContainers() {
+        val primaryLabel = "查看本周复习计划并导出学习数据"
+        val secondaryLabel = "清空筛选并重新浏览全部词条"
+        renderInViewport {
+            VocabCard {
+                Box(modifier = Modifier.requiredSize(width = 150.dp, height = 76.dp)) {
+                    PrimaryAction(primaryLabel, onClick = {}, modifier = Modifier.fillMaxSize())
+                }
+                Box(modifier = Modifier.requiredSize(width = 150.dp, height = 76.dp)) {
+                    SecondaryAction(secondaryLabel, onClick = {}, modifier = Modifier.fillMaxSize())
+                }
+            }
+        }
+
+        val primaryBounds = findTextNode(primaryLabel).getUnclippedBoundsInRoot()
+        val secondaryBounds = findTextNode(secondaryLabel).getUnclippedBoundsInRoot()
+        val primaryTextHeight = primaryBounds.bottom - primaryBounds.top
+        val secondaryTextHeight = secondaryBounds.bottom - secondaryBounds.top
+        assertTrue("Primary action label should wrap instead of staying single-line", primaryTextHeight > 28.dp)
+        assertTrue("Secondary action label should wrap instead of staying single-line", secondaryTextHeight > 28.dp)
+    }
+
+    @Test
+    fun filterChipExposesSelectionState() {
+        renderInViewport {
+            VocabCard {
+                VocabFilterChip(text = "CET4", selected = true, onClick = {})
+                VocabFilterChip(text = "CET6", selected = false, onClick = {})
+            }
+        }
+
+        composeRule.onAllNodes(stateDescriptionMatcher("已选择"), useUnmergedTree = true).assertCountEquals(1)
+        composeRule.onAllNodes(stateDescriptionMatcher("未选择"), useUnmergedTree = true).assertCountEquals(1)
     }
 
     private fun renderInViewport(content: @Composable () -> Unit) {
@@ -517,6 +1013,10 @@ class ScreenLayoutSmokeTest(
         composeRule.onAllNodesWithText(text, useUnmergedTree = true)[0].assertExists()
     }
 
+    private fun assertTextDoesNotExist(text: String) {
+        composeRule.onAllNodesWithText(text, substring = true, useUnmergedTree = true).assertCountEquals(0)
+    }
+
     private fun assertTextDisplayed(text: String) {
         findTextNode(text).assertIsDisplayed()
     }
@@ -526,6 +1026,25 @@ class ScreenLayoutSmokeTest(
     private fun clickNodeWithText(text: String) {
         composeRule.onAllNodesWithText(text)[0].performClick()
     }
+
+    private fun assertiveLiveRegionMatcher(): SemanticsMatcher =
+        SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Assertive)
+
+    private fun politeLiveRegionMatcher(): SemanticsMatcher =
+        SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)
+
+    private fun showDefinitionActionMatcher(): SemanticsMatcher =
+        SemanticsMatcher("has show definition click action") { node ->
+            node.config.getOrNull(SemanticsActions.OnClick)?.label == "显示释义"
+        }
+
+    private fun viewWordDetailActionMatcher(): SemanticsMatcher =
+        SemanticsMatcher("has view word detail click action") { node ->
+            node.config.getOrNull(SemanticsActions.OnClick)?.label == "查看词条"
+        }
+
+    private fun stateDescriptionMatcher(description: String): SemanticsMatcher =
+        SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, description)
 
     companion object {
         @JvmStatic
@@ -583,6 +1102,7 @@ private fun fakeWordbookUiState(
     selectedWordDetail: WordDetail? = null,
     words: List<WordEntry>? = null,
     showSelectedWordDetail: Boolean = true,
+    bookSelectionErrorMessage: String? = null,
 ): WordbookUiState {
     val word = fakeWordEntry("abandon")
     return WordbookUiState(
@@ -602,6 +1122,7 @@ private fun fakeWordbookUiState(
             } else {
                 null
             },
+        bookSelectionErrorMessage = bookSelectionErrorMessage,
     )
 }
 
@@ -698,11 +1219,14 @@ private fun fakeSettingsUiState(dataMaintenance: DataMaintenanceUiState = DataMa
         dataMaintenance = dataMaintenance,
     )
 
-private fun fakeReviewLoad(days: Int): List<DailyReviewLoad> =
+private fun fakeReviewLoad(
+    days: Int,
+    dueCount: Int? = null,
+): List<DailyReviewLoad> =
     (0 until days).map { index ->
         DailyReviewLoad(
             localDay = "2026-05-${(index % 28 + 1).toString().padStart(2, '0')}",
-            dueCount = (index * 3) % 11,
+            dueCount = dueCount ?: (index * 3) % 11,
         )
     }
 

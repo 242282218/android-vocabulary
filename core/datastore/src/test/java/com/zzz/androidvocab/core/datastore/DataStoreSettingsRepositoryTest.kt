@@ -79,6 +79,21 @@ class DataStoreSettingsRepositoryTest {
         }
 
     @Test
+    fun updateSelectedBooksPersistsInBookOrder() =
+        runTest {
+            val dataStore =
+                PreferenceDataStoreFactory.create {
+                    temporaryFolder.newFile("settings-${System.nanoTime()}.preferences_pb")
+                }
+            val repository = DataStoreSettingsRepository(dataStore)
+            val selectedBooksKey = stringPreferencesKey("selected_books")
+
+            repository.updateSelectedBooks(linkedSetOf(BookCode.TOEFL, BookCode.CET4, BookCode.CET6))
+
+            assertEquals("CET4,CET6,TOEFL", dataStore.data.first()[selectedBooksKey])
+        }
+
+    @Test
     fun invalidThemeModeFallsBackToSystem() =
         runTest {
             val dataStore =

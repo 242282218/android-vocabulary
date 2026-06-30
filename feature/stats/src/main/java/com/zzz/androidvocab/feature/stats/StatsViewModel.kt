@@ -9,6 +9,7 @@ import com.zzz.androidvocab.core.domain.GetRetentionStatsUseCase
 import com.zzz.androidvocab.core.domain.GetReviewLoadUseCase
 import com.zzz.androidvocab.core.domain.GetStreakUseCase
 import com.zzz.androidvocab.core.domain.ObserveSettingsUseCase
+import com.zzz.androidvocab.core.model.AppSettings
 import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.BookProgress
 import com.zzz.androidvocab.core.model.DailyActivity
@@ -19,10 +20,9 @@ import com.zzz.androidvocab.core.model.StreakStats
 import com.zzz.androidvocab.core.model.effectiveSelectedBookCodes
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
 
 data class StatsUiState(
@@ -48,7 +48,7 @@ class StatsViewModel
         getDifficultWordsUseCase: GetDifficultWordsUseCase,
         observeSettingsUseCase: ObserveSettingsUseCase,
     ) : ViewModel() {
-        val uiState =
+        private val snapshotFlow =
             combine(
                 getReviewLoadUseCase(REVIEW_LOAD_DAYS).onStart { emit(emptyList()) },
                 getDailyActivityUseCase(ACTIVITY_DAYS).onStart { emit(emptyList()) },
@@ -63,23 +63,24 @@ class StatsViewModel
                     streak = streak,
                     progress = progress,
                 )
-            }.let { snapshotFlow ->
-                combine(
-                    snapshotFlow,
-                    getDifficultWordsUseCase(DIFFICULT_WORDS_DAYS).onStart { emit(emptyList()) },
-                    observeSettingsUseCase().onStart { emit(com.zzz.androidvocab.core.model.AppSettings()) },
-                ) { snapshot, difficultWords, settings ->
-                    StatsUiState(
-                        isLoading = false,
-                        load = snapshot.load,
-                        activity = snapshot.activity,
-                        retention = snapshot.retention,
-                        streak = snapshot.streak,
-                        progress = snapshot.progress,
-                        difficultWords = difficultWords,
-                        selectedBooks = settings.selectedBooks.effectiveSelectedBookCodes(),
-                    )
-                }
+            }
+
+        val uiState =
+            combine(
+                snapshotFlow,
+                getDifficultWordsUseCase(DIFFICULT_WORDS_DAYS).onStart { emit(emptyList()) },
+                observeSettingsUseCase().onStart { emit(AppSettings()) },
+            ) { snapshot, difficultWords, settings ->
+                StatsUiState(
+                    isLoading = false,
+                    load = snapshot.load,
+                    activity = snapshot.activity,
+                    retention = snapshot.retention,
+                    streak = snapshot.streak,
+                    progress = snapshot.progress,
+                    difficultWords = difficultWords,
+                    selectedBooks = settings.selectedBooks.effectiveSelectedBookCodes(),
+                )
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StatsUiState())
     }
 

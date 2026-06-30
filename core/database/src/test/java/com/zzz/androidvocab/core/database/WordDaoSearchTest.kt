@@ -147,6 +147,29 @@ class WordDaoSearchTest {
         }
 
     @Test
+    fun wordDetailMembershipsUseProductBookOrder() =
+        runTest {
+            val now = Instant.parse("2026-05-16T08:00:00Z")
+            val entry = word("shared-word", "shared", now)
+            database.wordDao().upsertWords(listOf(entry))
+            database.wordDao().upsertMemberships(
+                listOf(
+                    membership(entry.id, BookCode.IELTS, orderIndex = 0),
+                    membership(entry.id, BookCode.KAOYAN, orderIndex = 0),
+                ),
+            )
+
+            val memberships =
+                database
+                    .wordDao()
+                    .observeMemberships(entry.id)
+                    .first()
+                    .map { it.bookCode }
+
+            assertEquals(listOf(BookCode.KAOYAN.name, BookCode.IELTS.name), memberships)
+        }
+
+    @Test
     fun deleteCardsWithoutMembershipRemovesOrphanCards() =
         runTest {
             val now = Instant.parse("2026-05-16T08:00:00Z")

@@ -95,6 +95,32 @@ class BookLearningStatsTest {
     }
 
     @Test
+    fun emptySelectedBooksFiltersAgainstAllBooks() {
+        val words = listOf(word("shared"))
+        val cards =
+            listOf(
+                reviewCard(
+                    wordId = "shared",
+                    bookCode = BookCode.TOEFL,
+                    retrievability = 0.90,
+                    dueAt = now.minusSeconds(60),
+                ),
+            )
+
+        val result =
+            filterWordsByStatus(
+                words = words,
+                cards = cards,
+                selectedBooks = emptySet(),
+                statusFilter = WordStatusFilter.Due,
+                now = now,
+                retrievability = { it.retrievability },
+            )
+
+        assertEquals(listOf("shared"), result.map { it.id })
+    }
+
+    @Test
     fun sharedWordIsNotUnlearnedWhenAnySelectedBookHasCard() {
         val words = listOf(word("shared"))
         val cards =

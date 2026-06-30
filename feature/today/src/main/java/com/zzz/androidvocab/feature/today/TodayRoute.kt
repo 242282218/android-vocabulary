@@ -1,21 +1,16 @@
 package com.zzz.androidvocab.feature.today
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -27,13 +22,16 @@ import com.zzz.androidvocab.core.designsystem.MiniReviewLoadChart
 import com.zzz.androidvocab.core.designsystem.PrimaryAction
 import com.zzz.androidvocab.core.designsystem.SectionTitle
 import com.zzz.androidvocab.core.designsystem.VocabCard
-import com.zzz.androidvocab.core.designsystem.VocabColors
 import com.zzz.androidvocab.core.designsystem.VocabEmptyState
+import com.zzz.androidvocab.core.designsystem.VocabErrorCard
+import com.zzz.androidvocab.core.designsystem.VocabLoadingCard
 import com.zzz.androidvocab.core.designsystem.VocabPageHeader
 import com.zzz.androidvocab.core.designsystem.VocabPill
 import com.zzz.androidvocab.core.designsystem.VocabProgressBar
 import com.zzz.androidvocab.core.designsystem.VocabScreen
 import com.zzz.androidvocab.core.designsystem.WarmHeroCard
+import com.zzz.androidvocab.core.designsystem.vocabWholePercent
+import com.zzz.androidvocab.core.model.BookCode
 import com.zzz.androidvocab.core.model.TodayOverview
 
 @Composable
@@ -61,7 +59,10 @@ fun TodayScreen(
                 },
         )
         if (uiState.isLoading) {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+            VocabLoadingCard(
+                title = "正在加载今日队列",
+                body = "正在读取本地学习状态和未来复习负载。",
+            )
             return@VocabScreen
         }
         val overview = uiState.overview
@@ -77,55 +78,67 @@ fun TodayScreen(
             return@VocabScreen
         }
         if (overview != null) {
-            TodayFocusCard(
+            TodayOverviewContent(
+                uiState = uiState,
                 overview = overview,
-                isRefreshingReviewSession = uiState.isRefreshingReviewSession,
                 onStartReview = onStartReview,
+                onRetryImport = onRetryImport,
             )
-            if (uiState.isImporting) {
-                TodayImportingCard()
-            } else {
-                uiState.errorMessage?.let {
-                    TodayImportErrorCard(
-                        message = it,
-                        onRetryImport = onRetryImport,
-                    )
-                }
-            }
-            VocabCard {
-                SectionTitle("完成进度", detail = "预计 ${overview.stats.estimatedMinutes} 分钟")
-                TodayProgress(overview)
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
-                    MetricBlock("完成", overview.stats.completedCount.toString(), Modifier.weight(1f))
-                    MetricBlock("正确率", "${(overview.stats.recallAccuracy * 100).toInt()}%", Modifier.weight(1f))
-                    MetricBlock("词书", overview.selectedBooks.size.toString(), Modifier.weight(1f))
-                }
-            }
-            VocabCard {
-                SectionTitle("未来 14 天", detail = "复习压力")
-                MiniReviewLoadChart(load = uiState.reviewLoad, height = 56.dp)
-                Text(
-                    text = "柱越高表示当天到期词越多，提前完成可以让后续更平滑。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        } else {
+            TodayMissingOverviewCard(onRetryImport = onRetryImport)
         }
     }
 }
 
 @Composable
-private fun TodayImportingCard() {
-    VocabCard(
-        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-        elevated = false,
-    ) {
-        VocabEmptyState(
-            title = "正在准备词库",
-            body = "正在校验并导入 publish-safe 词库，完成后会生成今日学习队列。",
-        )
-        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+private fun TodayOverviewContent(
+    uiState: TodayUiState,
+    overview: TodayOverview,
+    onStartReview: () -> Unit,
+    onRetryImport: () -> Unit,
+) {
+    TodayFocusCard(
+        overview = overview,
+        isRefreshingReviewSession = uiState.isRefreshingReviewSession,
+        onStartReview = onStartReview,
+    )
+    if (uiState.isImporting) {
+        TodayImportingCard()
+    } else {
+        uiState.errorMessage?.let {
+            TodayImportErrorCard(
+                message = it,
+                onRetryImport = onRetryImport,
+            )
+        }
     }
+    VocabCard {
+        SectionTitle("完成进度", detail = "预计 ${overview.stats.estimatedMinutes} 分钟")
+        TodayProgress(overview)
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+            MetricBlock("完成", overview.stats.completedCount.toString(), Modifier.weight(1f))
+            MetricBlock("正确率", "${vocabWholePercent(overview.stats.recallAccuracy)}%", Modifier.weight(1f))
+            MetricBlock("词书", todaySelectedBookCount(overview.selectedBooks).toString(), Modifier.weight(1f))
+        }
+    }
+    VocabCard {
+        SectionTitle("未来 14 天", detail = "复习压力")
+        MiniReviewLoadChart(load = uiState.reviewLoad, height = 56.dp)
+        Text(
+            text = "柱越高表示当天到期词越多，提前完成可以让后续更平滑。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun TodayImportingCard() {
+    VocabLoadingCard(
+        title = "正在准备词库",
+        body = "正在校验并导入 publish-safe 词库，完成后会生成今日学习队列。",
+        elevated = false,
+    )
 }
 
 @Composable
@@ -133,14 +146,19 @@ private fun TodayImportErrorCard(
     message: String,
     onRetryImport: () -> Unit,
 ) {
-    val isDark = isSystemInDarkTheme()
-    VocabCard(
-        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
-        elevated = false,
-        containerColor = if (isDark) VocabColors.ErrorCardBackgroundDark else VocabColors.ErrorCardBackground,
-        borderColor = MaterialTheme.colorScheme.error.copy(alpha = 0.24f),
-    ) {
+    VocabErrorCard {
         VocabEmptyState(title = "词库导入失败", body = message)
+        PrimaryAction("重试导入", onRetryImport, Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun TodayMissingOverviewCard(onRetryImport: () -> Unit) {
+    VocabCard {
+        VocabEmptyState(
+            title = "暂无今日队列",
+            body = "还没有从本地词库生成今日学习队列。可以重新导入词库，完成后会显示今天的新词和复习词。",
+        )
         PrimaryAction("重试导入", onRetryImport, Modifier.fillMaxWidth())
     }
 }
@@ -244,21 +262,25 @@ private fun TodayProgress(overview: TodayOverview) {
         } else {
             overview.stats.completedCount.toFloat() / total.toFloat()
         }
+    val progressPercent = vocabWholePercent(fraction)
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        VocabProgressBar(progress = fraction)
+        VocabProgressBar(
+            progress = fraction,
+            semanticDescription = "今日完成进度 $progressPercent%",
+        )
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "进度 ${(fraction * 100).toInt()}%",
+                "进度 $progressPercent%",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
             Text(
-                overview.selectedBooks.joinToString { it.displayName },
+                todaySelectedBookLabel(overview.selectedBooks),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
@@ -269,3 +291,13 @@ private fun TodayProgress(overview: TodayOverview) {
         }
     }
 }
+
+private fun todaySelectedBookCount(selectedBooks: List<BookCode>): Int =
+    if (selectedBooks.isEmpty()) BookCode.entries.size else selectedBooks.size
+
+private fun todaySelectedBookLabel(selectedBooks: List<BookCode>): String =
+    if (selectedBooks.isEmpty()) {
+        "全部词书"
+    } else {
+        selectedBooks.joinToString { it.displayName }
+    }

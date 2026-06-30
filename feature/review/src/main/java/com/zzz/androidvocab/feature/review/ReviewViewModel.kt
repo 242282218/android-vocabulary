@@ -14,7 +14,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -88,12 +90,6 @@ class ReviewViewModel
                 submittedCardStateFlow,
             ) { content, submitting, error, submittedState ->
                 val submittedCardId = submittedState.submittedCardId
-                if (submittedCardId != null && !submittedState.isStillInRawQueue) {
-                    reviewSessionCoordinator.clearSubmittedCard(submittedCardId)
-                }
-                if (content.item?.card?.id != failedSubmitCardId.get()) {
-                    clearFailedSubmitDuration()
-                }
                 val isAdvancing =
                     submittedCardId != null &&
                         content.isAdvancingPossible &&
@@ -110,7 +106,39 @@ class ReviewViewModel
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReviewUiState())
 
         // Exposed for showBack() so it doesn't need to read uiState.value directly.
-        val currentCardId = queueFlow.map { it.items.firstOrNull()?.card?.id }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        val currentCardId =
+            queueFlow
+                .map { queue ->
+                    queue.items
+                        .firstOrNull()
+                        ?.card
+                        ?.id
+                }.stateIn(
+                    scope = viewModelScope,
+                    started = SharingStarted.Eagerly,
+                    initialValue = null,
+                )
+
+        init {
+            viewModelScope.launch {
+                submittedCardStateFlow.collect { state ->
+                    val submittedCardId = state.submittedCardId
+                    if (submittedCardId != null && !state.isStillInRawQueue) {
+                        reviewSessionCoordinator.clearSubmittedCard(submittedCardId)
+                    }
+                }
+            }
+            viewModelScope.launch {
+                uiContentFlow
+                    .map { content -> content.item?.card?.id }
+                    .distinctUntilChanged()
+                    .collect { cardId ->
+                        if (cardId != failedSubmitCardId.get()) {
+                            clearFailedSubmitDuration()
+                        }
+                    }
+            }
+        }
 
         fun showBack() {
             val cardId = currentCardId.value ?: return

@@ -27,6 +27,8 @@ import com.zzz.androidvocab.core.model.SourceInfo
 import com.zzz.androidvocab.core.model.WordDetail
 import com.zzz.androidvocab.core.model.WordEntry
 import com.zzz.androidvocab.core.model.WordStatusFilter
+import com.zzz.androidvocab.core.model.effectiveSelectedBookCodeNames
+import com.zzz.androidvocab.core.model.effectiveSelectedBookCodes
 import com.zzz.androidvocab.core.model.toBookCodeOrNull
 import com.zzz.androidvocab.core.scheduler.ReviewScheduler
 import dagger.Binds
@@ -46,6 +48,8 @@ import java.security.MessageDigest
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private const val BUILD_TARGET_PUBLISH = "publish"
 
 class AssetVocabularyRepository
     @Inject
@@ -90,14 +94,14 @@ class AssetVocabularyRepository
             now: Instant,
         ): Flow<List<WordEntry>> =
             combine(
-                wordDao.searchWords(escapeLikeWildcards(query.trim()), bookCodes.toSearchNames()),
+                wordDao.searchWords(escapeLikeWildcards(query.trim()), bookCodes.effectiveSelectedBookCodeNames()),
                 wordDao.observeValidReviewCards(),
                 settingsRepository.settings,
             ) { rows, cards, settings ->
                 filterWordsByStatus(
                     words = rows.map { it.toModel() },
                     cards = cards.map { it.toModel() },
-                    selectedBooks = bookCodes.ifEmpty { BookCode.entries.toSet() },
+                    selectedBooks = bookCodes.effectiveSelectedBookCodes().toSet(),
                     statusFilter = statusFilter,
                     now = now,
                     retrievability = { card -> scheduler.retrievability(card, now, settings.targetRetention) },
@@ -130,7 +134,7 @@ class AssetVocabularyRepository
                     val now = clockProvider.now()
                     val manifestText = readAsset("vocab/manifest.json")
                     val manifest = json.decodeFromString<VocabManifest>(manifestText)
-                    if (manifest.buildTarget != "publish") {
+                    if (manifest.buildTarget != BUILD_TARGET_PUBLISH) {
                         throw AppException(
                             AppError.VocabularyImportFailed("Vocabulary manifest is not publish-safe"),
                         )
@@ -361,8 +365,6 @@ class AssetVocabularyRepository
             }
     }
 
-private fun Set<BookCode>.toSearchNames(): List<String> = ifEmpty { BookCode.entries.toSet() }.map { it.name }
-
 private fun escapeLikeWildcards(input: String): String =
     input.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -373,7 +375,11 @@ internal fun isCurrentPublishSafeImport(
     bookCounts: Map<BookCode, Int>,
 ): Boolean {
     if (!hasSourceManifest || latestImportRun == null) return false
-    if (manifest.buildTarget != "publish" || latestImportRun.buildTarget != "publish") return false
+    if (manifest.buildTarget != BUILD_TARGET_PUBLISH ||
+        latestImportRun.buildTarget != BUILD_TARGET_PUBLISH
+    ) {
+        return false
+    }
     if (latestImportRun.generatedAt != manifest.generatedAt) return false
     if (manifest.assetFingerprint.isBlank()) return false
     if (latestImportRun.assetFingerprint != manifest.assetFingerprint) return false

@@ -262,6 +262,39 @@ class SettingsViewModelTest {
         }
 
     @Test
+    fun exportDataClearsPreviousSuccessWhenLaterFailure() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val exportRepository = MutableExportRepository()
+            val viewModel = viewModel(exportRepository = exportRepository)
+            val collector =
+                launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.collect()
+                }
+
+            viewModel.exportData()
+            advanceUntilIdle()
+
+            assertEquals(
+                "export.json",
+                viewModel.uiState.value.exportResult
+                    ?.fileName,
+            )
+            assertEquals(null, viewModel.uiState.value.exportErrorMessage)
+
+            exportRepository.error = AppException(AppError.ExportFailed("disk full"))
+            viewModel.exportData()
+            advanceUntilIdle()
+
+            assertEquals(2, exportRepository.callCount)
+            assertEquals(false, viewModel.uiState.value.isExporting)
+            assertEquals(null, viewModel.uiState.value.exportResult)
+            assertEquals("数据导出失败：disk full", viewModel.uiState.value.exportErrorMessage)
+            collector.cancel()
+        }
+
+    @Test
     fun inspectLearningDataUpdatesMaintenanceState() =
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)
@@ -632,6 +665,52 @@ class SettingsViewModelTest {
         }
 
     @Test
+    fun repairLearningDataClearsPreviousErrorBeforeCompletion() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val reviewRepository = MaintenanceReviewRepository()
+            reviewRepository.repairException = AppException(AppError.DatabaseWriteFailed("disk full"))
+            val viewModel = viewModel(reviewRepository)
+            launch(UnconfinedTestDispatcher(testScheduler)) {
+                viewModel.uiState.first { it.dataMaintenance.errorMessage != null }
+            }
+
+            viewModel.repairLearningData()
+            advanceUntilIdle()
+
+            val failedMaintenance = viewModel.uiState.value.dataMaintenance
+            assertEquals("学习数据保存失败：disk full", failedMaintenance.errorMessage)
+            assertEquals(false, failedMaintenance.inProgress)
+
+            reviewRepository.repairException = null
+            reviewRepository.repairGate = CompletableDeferred()
+            val pending =
+                async(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.first { it.dataMaintenance.inProgress && it.dataMaintenance.errorMessage == null }
+                }
+
+            viewModel.repairLearningData()
+            advanceUntilIdle()
+
+            val pendingState = pending.await().dataMaintenance
+            assertEquals(null, pendingState.errorMessage)
+            assertEquals(true, pendingState.inProgress)
+
+            val ready =
+                async(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.first { !it.dataMaintenance.inProgress && it.dataMaintenance.message != null }
+                }
+            reviewRepository.repairGate!!.complete(Unit)
+            advanceUntilIdle()
+
+            val readyMaintenance = ready.await().dataMaintenance
+            assertEquals("已修复 0 项，剩余可修复 0 项，需人工确认 0 项。", readyMaintenance.message)
+            assertEquals(false, readyMaintenance.inProgress)
+            assertEquals(null, readyMaintenance.errorMessage)
+        }
+
+    @Test
     fun settingsStateIncludesVocabularySources() =
         runTest {
             kotlinx.coroutines.Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
@@ -879,6 +958,24 @@ private class FakeVocabularyRepository(
 
 private class FakeExportRepository : ExportRepository {
     override suspend fun exportUserData(): ExportResult = unsupported()
+}
+
+private class MutableExportRepository(
+    private val result: ExportResult =
+        ExportResult(
+            fileName = "export.json",
+            absolutePath = "D:\\exports\\export.json",
+        ),
+) : ExportRepository {
+    var error: Exception? = null
+    var callCount: Int = 0
+        private set
+
+    override suspend fun exportUserData(): ExportResult {
+        callCount += 1
+        error?.let { throw it }
+        return result
+    }
 }
 
 private class RecordingExportRepository(

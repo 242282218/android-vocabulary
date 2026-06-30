@@ -233,7 +233,8 @@ function Get-AndroidTool {
         $tool =
             Get-ChildItem -Path (Join-Path $sdkDir $relativeDir) -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $Names -contains $_.Name } |
-            Sort-Object FullName -Descending |
+            Where-Object { Test-AndroidToolCandidate $_ } |
+            Sort-Object @{ Expression = { $_.FullName.Split([IO.Path]::DirectorySeparatorChar).Count } }, FullName |
             Select-Object -First 1
         if ($null -ne $tool) {
             return $tool.FullName
@@ -241,6 +242,22 @@ function Get-AndroidTool {
     }
 
     throw "Android tool not found: $($Names -join ', ')"
+}
+
+function Test-AndroidToolCandidate {
+    param([System.IO.FileInfo]$Tool)
+
+    if ($Tool.Name -notin @('apksigner', 'apksigner.bat')) {
+        return $true
+    }
+
+    $toolDir = $Tool.DirectoryName
+    $jarCandidates = @(
+        (Join-Path $toolDir 'apksigner.jar'),
+        (Join-Path (Join-Path $toolDir 'lib') 'apksigner.jar'),
+        (Join-Path (Join-Path $toolDir '..\framework') 'apksigner.jar')
+    )
+    return @($jarCandidates | Where-Object { Test-Path -LiteralPath $_ }).Count -gt 0
 }
 
 function Get-GradleWrapper {

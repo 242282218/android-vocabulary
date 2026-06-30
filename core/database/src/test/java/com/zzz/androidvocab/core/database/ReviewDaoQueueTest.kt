@@ -77,6 +77,47 @@ class ReviewDaoQueueTest {
         }
 
     @Test
+    fun dueQueueUsesStableProductAndOrderIndexTieBreakers() =
+        runTest {
+            val now = Instant.parse("2026-05-16T08:00:00Z")
+            seedWord(
+                wordId = "ielts-word",
+                value = "ielts",
+                bookCode = BookCode.IELTS,
+                orderIndex = 0,
+                now = now,
+            )
+            seedWord(wordId = "cet4-later-word", value = "cet4-later", orderIndex = 2, now = now)
+            seedWord(
+                wordId = "kaoyan-word",
+                value = "kaoyan",
+                bookCode = BookCode.KAOYAN,
+                orderIndex = 0,
+                now = now,
+            )
+            seedWord(wordId = "cet4-earlier-word", value = "cet4-earlier", orderIndex = 1, now = now)
+            listOf(
+                "ielts-word" to BookCode.IELTS,
+                "cet4-later-word" to BookCode.CET4,
+                "kaoyan-word" to BookCode.KAOYAN,
+                "cet4-earlier-word" to BookCode.CET4,
+            ).forEach { (wordId, bookCode) ->
+                database.reviewDao().upsertCard(reviewCard(wordId, now, bookCode))
+            }
+
+            val queue =
+                database
+                    .reviewDao()
+                    .observeDueQueue(
+                        now = now,
+                        bookCodes = listOf(BookCode.IELTS.name, BookCode.CET4.name, BookCode.KAOYAN.name),
+                        difficultySince = now.minusSeconds(3_600),
+                    ).first()
+
+            assertEquals(listOf("cet4-earlier", "cet4-later", "kaoyan", "ielts"), queue.map { it.word })
+        }
+
+    @Test
     fun validLogWithoutCardCacheIsRepairableAndNotNew() =
         runTest {
             val now = Instant.parse("2026-05-16T08:00:00Z")
@@ -101,6 +142,36 @@ class ReviewDaoQueueTest {
             assertEquals(emptyList<String>(), newQueue.map { it.word })
             assertEquals(listOf(knownCardId), database.reviewDao().getCardIdsWithLogs())
             assertEquals(listOf(knownCardId), database.reviewDao().getCardIdsMissingCacheFromLogs())
+        }
+
+    @Test
+    fun newQueueUsesProductBookOrderBeforeOrderIndex() =
+        runTest {
+            val now = Instant.parse("2026-05-16T08:00:00Z")
+            seedWord(
+                wordId = "ielts-word",
+                value = "ielts",
+                bookCode = BookCode.IELTS,
+                orderIndex = 0,
+                now = now,
+            )
+            seedWord(
+                wordId = "kaoyan-word",
+                value = "kaoyan",
+                bookCode = BookCode.KAOYAN,
+                orderIndex = 0,
+                now = now,
+            )
+
+            val newQueue =
+                database
+                    .reviewDao()
+                    .observeNewQueue(
+                        bookCodes = listOf(BookCode.IELTS.name, BookCode.KAOYAN.name),
+                        limit = 10,
+                    ).first()
+
+            assertEquals(listOf("kaoyan", "ielts"), newQueue.map { it.word })
         }
 
     @Test
@@ -139,6 +210,7 @@ class ReviewDaoQueueTest {
     private suspend fun seedWord(
         wordId: String,
         value: String,
+        bookCode: BookCode = BookCode.CET4,
         orderIndex: Int,
         now: Instant,
     ) {
@@ -165,7 +237,7 @@ class ReviewDaoQueueTest {
             listOf(
                 WordBookMembershipEntity(
                     wordId = wordId,
-                    bookCode = BookCode.CET4.name,
+                    bookCode = bookCode.name,
                     orderIndex = orderIndex,
                     examFrequencyScore = 1.0,
                     examPriorityScore = 1.0,
@@ -179,10 +251,11 @@ class ReviewDaoQueueTest {
     private fun reviewCard(
         wordId: String,
         now: Instant,
+        bookCode: BookCode = BookCode.CET4,
     ) = ReviewCardEntity(
-        id = cardId(wordId, BookCode.CET4.name),
+        id = cardId(wordId, bookCode.name),
         wordId = wordId,
-        bookCode = BookCode.CET4.name,
+        bookCode = bookCode.name,
         state = ReviewState.Review.name,
         difficulty = 0.5,
         stability = 3.0,

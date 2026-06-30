@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.zzz.androidvocab.core.common.ClockProvider
 import com.zzz.androidvocab.core.common.cardId
 import com.zzz.androidvocab.core.model.BookCode
+import com.zzz.androidvocab.core.model.ReviewCard
 import com.zzz.androidvocab.core.model.ReviewRating
 import com.zzz.androidvocab.core.model.ReviewState
 import com.zzz.androidvocab.core.model.SubmitFeedbackCommand
@@ -34,6 +35,20 @@ internal fun newOfflineReviewRepository(
     clockProvider: ClockProvider,
 ): OfflineReviewRepository =
     OfflineReviewRepository(
+        database = database,
+        reviewDao = database.reviewDao(),
+        statsDao = database.statsDao(),
+        scheduler = scheduler,
+        clockProvider = clockProvider,
+        integrityService = newReviewDataIntegrityService(database, scheduler, clockProvider),
+    )
+
+internal fun newReviewDataIntegrityService(
+    database: VocabDatabase,
+    scheduler: ReviewScheduler,
+    clockProvider: ClockProvider,
+): ReviewDataIntegrityService =
+    ReviewDataIntegrityService(
         database = database,
         reviewDao = database.reviewDao(),
         statsDao = database.statsDao(),
@@ -182,6 +197,12 @@ internal class CountingClock(
 internal class DeterministicScheduler : ReviewScheduler {
     override val algorithm: SchedulerAlgorithm = SchedulerAlgorithm.Fsrs
 
+    override fun retrievability(
+        card: ReviewCard,
+        now: Instant,
+        targetRetention: Double,
+    ): Double? = card.retrievability ?: targetRetention
+
     override fun schedule(input: ScheduleInput): ScheduleResult {
         val scheduledDays = input.card.scheduledDays + (input.targetRetention * 100).toInt() + input.rating.ordinal
         val nextCard =
@@ -218,6 +239,12 @@ internal class DeterministicScheduler : ReviewScheduler {
 
 internal class RecordingScheduler : ReviewScheduler {
     override val algorithm: SchedulerAlgorithm = SchedulerAlgorithm.Fsrs
+
+    override fun retrievability(
+        card: ReviewCard,
+        now: Instant,
+        targetRetention: Double,
+    ): Double? = card.retrievability ?: targetRetention
 
     override fun schedule(input: ScheduleInput): ScheduleResult {
         enableFuzzingValues += input.enableFuzzing
@@ -264,6 +291,12 @@ internal class OperationRecordingScheduler(
 ) : ReviewScheduler {
     override val algorithm: SchedulerAlgorithm = delegate.algorithm
 
+    override fun retrievability(
+        card: ReviewCard,
+        now: Instant,
+        targetRetention: Double,
+    ): Double? = delegate.retrievability(card, now, targetRetention)
+
     override fun schedule(input: ScheduleInput): ScheduleResult {
         operations += "schedule"
         return delegate.schedule(input)
@@ -272,6 +305,12 @@ internal class OperationRecordingScheduler(
 
 internal class FailingScheduler : ReviewScheduler {
     override val algorithm: SchedulerAlgorithm = SchedulerAlgorithm.Fsrs
+
+    override fun retrievability(
+        card: ReviewCard,
+        now: Instant,
+        targetRetention: Double,
+    ): Double? = error("scheduler unavailable")
 
     override fun schedule(input: ScheduleInput): ScheduleResult = error("scheduler unavailable")
 }
@@ -289,8 +328,6 @@ internal class FailingUpsertCardReviewDao(
 
     override suspend fun insertLog(log: ReviewLogEntity) = delegate.insertLog(log)
 
-    override suspend fun updateLog(log: ReviewLogEntity) = delegate.updateLog(log)
-
     override suspend fun getCard(cardId: String): ReviewCardEntity? = delegate.getCard(cardId)
 
     override suspend fun getCardByWordAndBook(
@@ -302,67 +339,10 @@ internal class FailingUpsertCardReviewDao(
 
     override suspend fun getLogs(cardId: String): List<ReviewLogEntity> = delegate.getLogs(cardId)
 
-    override suspend fun getCardIdsWithLogs(): List<String> = delegate.getCardIdsWithLogs()
-
-    override suspend fun getValidLogs(): List<ReviewLogEntity> = delegate.getValidLogs()
-
-    override suspend fun countOrphanLogs(): Int = delegate.countOrphanLogs()
-
-    override suspend fun getCardIdsMissingCacheFromLogs(): List<String> = delegate.getCardIdsMissingCacheFromLogs()
-
-    override suspend fun getLogsForMissingCacheCards(): List<ReviewLogEntity> = delegate.getLogsForMissingCacheCards()
-
-    override suspend fun deleteCardsWithoutMembership() = delegate.deleteCardsWithoutMembership()
-
-    override fun observeDueQueue(
-        now: Instant,
-        bookCodes: List<String>,
-        difficultySince: Instant,
-    ): Flow<List<ReviewQueueRow>> =
-        delegate.observeDueQueue(
-            now = now,
-            bookCodes = bookCodes,
-            difficultySince = difficultySince,
-        )
-
-    override fun observeNewQueue(
-        bookCodes: List<String>,
-        limit: Int,
-    ): Flow<List<ReviewQueueRow>> = delegate.observeNewQueue(bookCodes, limit)
-
-    override suspend fun getQueueItem(cardId: String): ReviewQueueRow? = delegate.getQueueItem(cardId)
-
-    override suspend fun getNewQueueItem(
+    override suspend fun getValidLogsByWordAndBook(
         wordId: String,
         bookCode: String,
-    ): ReviewQueueRow? = delegate.getNewQueueItem(wordId, bookCode)
-}
-
-internal class FailingUpdateLogReviewDao(
-    private val delegate: ReviewDao,
-) : ReviewDao {
-    override suspend fun upsertCard(card: ReviewCardEntity) = delegate.upsertCard(card)
-
-    override suspend fun upsertCards(cards: List<ReviewCardEntity>) = delegate.upsertCards(cards)
-
-    override suspend fun updateCard(card: ReviewCardEntity) = delegate.updateCard(card)
-
-    override suspend fun insertLog(log: ReviewLogEntity) = delegate.insertLog(log)
-
-    override suspend fun updateLog(log: ReviewLogEntity) {
-        error("log update unavailable")
-    }
-
-    override suspend fun getCard(cardId: String): ReviewCardEntity? = delegate.getCard(cardId)
-
-    override suspend fun getCardByWordAndBook(
-        wordId: String,
-        bookCode: String,
-    ): ReviewCardEntity? = delegate.getCardByWordAndBook(wordId, bookCode)
-
-    override suspend fun deleteCard(cardId: String) = delegate.deleteCard(cardId)
-
-    override suspend fun getLogs(cardId: String): List<ReviewLogEntity> = delegate.getLogs(cardId)
+    ): List<ReviewLogEntity> = delegate.getValidLogsByWordAndBook(wordId, bookCode)
 
     override suspend fun getCardIdsWithLogs(): List<String> = delegate.getCardIdsWithLogs()
 
@@ -425,11 +405,6 @@ internal class RecordingPersistenceOrderReviewDao(
         delegate.insertLog(log)
     }
 
-    override suspend fun updateLog(log: ReviewLogEntity) {
-        operations += "updateLog"
-        delegate.updateLog(log)
-    }
-
     override suspend fun getCard(cardId: String): ReviewCardEntity? = delegate.getCard(cardId)
 
     override suspend fun getCardByWordAndBook(
@@ -440,6 +415,11 @@ internal class RecordingPersistenceOrderReviewDao(
     override suspend fun deleteCard(cardId: String) = delegate.deleteCard(cardId)
 
     override suspend fun getLogs(cardId: String): List<ReviewLogEntity> = delegate.getLogs(cardId)
+
+    override suspend fun getValidLogsByWordAndBook(
+        wordId: String,
+        bookCode: String,
+    ): List<ReviewLogEntity> = delegate.getValidLogsByWordAndBook(wordId, bookCode)
 
     override suspend fun getCardIdsWithLogs(): List<String> = delegate.getCardIdsWithLogs()
 

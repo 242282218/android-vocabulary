@@ -6,6 +6,7 @@ local.properties
 dist/
 *.apk
 hs_err_pid*.log
+replay_pid*.log
 *.iml
 .idea/
 *.jks

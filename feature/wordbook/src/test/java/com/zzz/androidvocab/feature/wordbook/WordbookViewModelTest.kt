@@ -1,5 +1,7 @@
 package com.zzz.androidvocab.feature.wordbook
 
+import com.zzz.androidvocab.core.common.AppError
+import com.zzz.androidvocab.core.common.AppException
 import com.zzz.androidvocab.core.common.ClockProvider
 import com.zzz.androidvocab.core.domain.GetBookProgressUseCase
 import com.zzz.androidvocab.core.domain.ObserveSettingsUseCase
@@ -322,6 +324,36 @@ class WordbookViewModelTest {
             collectionJob.cancel()
         }
 
+    @Test
+    fun toggleBookStoresFailureInsteadOfCrashing() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+            val vocabularyRepository = FakeVocabularyRepository()
+            val settingsRepository =
+                FakeSettingsRepository().apply {
+                    toggleBookException = AppException(AppError.DatabaseWriteFailed("disk full"))
+                }
+            val viewModel = viewModel(vocabularyRepository, settingsRepository)
+            val collectionJob =
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    viewModel.uiState.collect()
+                }
+            advanceTimeBy(300)
+            runCurrent()
+
+            viewModel.toggleBook(BookCode.CET6)
+            runCurrent()
+
+            val state = viewModel.uiState.first { it.bookSelectionErrorMessage != null }
+            assertEquals(setOf(BookCode.CET4), state.settings.selectedBooks)
+            assertEquals(
+                "词书选择保存失败：disk full。当前选择已保留，可以再次点选词书重试。",
+                state.bookSelectionErrorMessage,
+            )
+            collectionJob.cancel()
+        }
+
     private fun viewModel(
         vocabularyRepository: VocabularyRepository,
         settingsRepository: SettingsRepository,
@@ -368,6 +400,8 @@ private class FakeSettingsRepository : SettingsRepository {
     override val settings: MutableStateFlow<AppSettings> =
         MutableStateFlow(AppSettings(selectedBooks = setOf(BookCode.CET4)))
 
+    var toggleBookException: Exception? = null
+
     override suspend fun updateDailyNewLimit(value: Int) = Unit
 
     override suspend fun updateSelectedBooks(bookCodes: Set<BookCode>) {
@@ -375,6 +409,7 @@ private class FakeSettingsRepository : SettingsRepository {
     }
 
     override suspend fun toggleBook(bookCode: BookCode) {
+        toggleBookException?.let { throw it }
         val selected = settings.value.selectedBooks
         settings.value =
             settings.value.copy(
